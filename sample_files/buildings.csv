@@ -1,0 +1,21 @@
+Building ID,Building Name,Tower ID,Floor Number,Total Seats
+B1,HQ Campus,B1-T1,1,80
+B1,HQ Campus,B1-T1,2,80
+B1,HQ Campus,B1-T1,3,120
+B1,HQ Campus,B1-T1,4,100
+B1,HQ Campus,B1-T1,5,100
+B1,HQ Campus,B1-T2,1,100
+B1,HQ Campus,B1-T2,2,80
+B1,HQ Campus,B1-T2,3,80
+B1,HQ Campus,B1-T2,4,150
+B1,HQ Campus,B1-T2,5,80
+B2,Tech Park,B2-T1,1,80
+B2,Tech Park,B2-T1,2,80
+B2,Tech Park,B2-T1,3,100
+B2,Tech Park,B2-T1,4,100
+B2,Tech Park,B2-T1,5,80
+B2,Tech Park,B2-T2,1,100
+B2,Tech Park,B2-T2,2,150
+B2,Tech Park,B2-T2,3,100
+B2,Tech Park,B2-T2,4,150
+B2,Tech Park,B2-T2,5,120

@@ -1,0 +1,9 @@
+Unit Name,Current Total Headcount,HC Growth Forecast (%),Attrition Forecast (%),Business Priority
+Engineering,400,15,8,High
+Product,150,10,5,High
+Sales,300,5,12,Medium
+Marketing,120,8,6,Medium
+Finance,80,2,3,Low
+HR,60,3,4,Low
+Legal,40,1,2,Low
+Operations,200,-2,10,Medium

@@ -66,3 +66,55 @@ def explain_allocation(
     )
 
     return steps
+
+
+def explain_simple_allocation(
+    unit_name: str,
+    current_hc: int,
+    base_alloc: float,
+    is_override: bool,
+    global_alloc: float,
+    hc_growth_pct: float,
+    attrition_pct: float,
+    horizon_months: int,
+    horizon_factor: float,
+    adjusted_alloc: float,
+    recommended_alloc_pct: float,
+    effective_demand: int,
+    was_clamped: bool,
+) -> List[str]:
+    """Produce step-by-step explanation for a simple-mode allocation."""
+    steps = []
+
+    if is_override:
+        steps.append(
+            f"Step 1 - Allocation %: Unit override = {base_alloc:.0%} "
+            f"(global default is {global_alloc:.0%})"
+        )
+    else:
+        steps.append(
+            f"Step 1 - Allocation %: Global default = {base_alloc:.0%}"
+        )
+
+    net_change = hc_growth_pct - attrition_pct
+    steps.append(
+        f"Step 2 - Growth/Attrition: Growth {hc_growth_pct:+.1%}, Attrition {attrition_pct:+.1%} "
+        f"=> net {net_change:+.1%} over {horizon_months}mo => factor {horizon_factor:.3f}"
+    )
+
+    steps.append(
+        f"Step 3 - Adjusted allocation: {base_alloc:.0%} x {horizon_factor:.3f} "
+        f"= {adjusted_alloc:.1%}"
+    )
+
+    if was_clamped:
+        steps.append(
+            f"Note: Allocation clamped to policy bounds => {recommended_alloc_pct:.1%}"
+        )
+
+    steps.append(
+        f"Step 4 - Effective demand: {recommended_alloc_pct:.1%} x {current_hc} HC "
+        f"= {effective_demand} seats needed"
+    )
+
+    return steps

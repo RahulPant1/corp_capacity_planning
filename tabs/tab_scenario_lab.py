@@ -78,9 +78,18 @@ def render(sidebar_state):
     # --- Unit-Level Override Table ---
     st.subheader("Unit-Level Overrides")
 
+    rule_config = get_rule_config()
+    alloc_mode = rule_config.get("allocation_mode", "simple")
+
     units = get_units()
     attendance_profiles = get_attendance()
     att_map = {a.unit_name: a for a in attendance_profiles}
+
+    if alloc_mode == "simple":
+        st.caption(
+            "Simple allocation mode — overrides affect growth, attrition, and allocation %. "
+            "RTO days are not used for allocation in this mode."
+        )
 
     # Build editable dataframe
     rows = []
@@ -88,23 +97,31 @@ def render(sidebar_state):
         att = att_map.get(u.unit_name)
         override = scenario.unit_overrides.get(u.unit_name, ScenarioOverride(unit_name=u.unit_name))
 
-        rows.append({
+        row = {
             "Unit": u.unit_name,
             "Baseline Growth %": u.hc_growth_pct * 100,
             "Scenario Growth %": (override.hc_growth_pct or u.hc_growth_pct) * 100,
             "Baseline Attrition %": u.attrition_pct * 100,
             "Scenario Attrition %": (override.attrition_pct or u.attrition_pct) * 100,
-            "Baseline RTO Days": att.avg_rto_days_per_week if att else 3.0,
-            "Scenario RTO Days": override.avg_rto_days or (att.avg_rto_days_per_week if att else 3.0),
-            "Alloc % Override": (override.alloc_pct_override or 0) * 100,
-        })
+        }
+
+        if alloc_mode == "advanced":
+            row["Baseline RTO Days"] = att.avg_rto_days_per_week if att else 3.0
+            row["Scenario RTO Days"] = override.avg_rto_days or (att.avg_rto_days_per_week if att else 3.0)
+
+        row["Alloc % Override"] = (override.alloc_pct_override or 0) * 100
+        rows.append(row)
 
     edit_df = pd.DataFrame(rows)
+
+    disabled_cols = ["Unit", "Baseline Growth %", "Baseline Attrition %"]
+    if alloc_mode == "advanced":
+        disabled_cols.append("Baseline RTO Days")
 
     if not scenario.is_locked:
         edited = st.data_editor(
             edit_df,
-            disabled=["Unit", "Baseline Growth %", "Baseline Attrition %", "Baseline RTO Days"],
+            disabled=disabled_cols,
             use_container_width=True,
             key="scenario_unit_editor",
             num_rows="fixed",
@@ -156,9 +173,6 @@ def render(sidebar_state):
             if not base_unit:
                 continue
 
-            att = att_map.get(unit_name)
-            base_rto = att.avg_rto_days_per_week if att else 3.0
-
             override = ScenarioOverride(unit_name=unit_name)
             has_change = False
 
@@ -168,9 +182,12 @@ def render(sidebar_state):
             if abs(row["Scenario Attrition %"] - base_unit.attrition_pct * 100) > 0.01:
                 override.attrition_pct = row["Scenario Attrition %"] / 100.0
                 has_change = True
-            if abs(row["Scenario RTO Days"] - base_rto) > 0.01:
-                override.avg_rto_days = row["Scenario RTO Days"]
-                has_change = True
+            if alloc_mode == "advanced" and "Scenario RTO Days" in row:
+                att = att_map.get(unit_name)
+                base_rto = att.avg_rto_days_per_week if att else 3.0
+                if abs(row["Scenario RTO Days"] - base_rto) > 0.01:
+                    override.avg_rto_days = row["Scenario RTO Days"]
+                    has_change = True
             if row["Alloc % Override"] > 0:
                 override.alloc_pct_override = row["Alloc % Override"] / 100.0
                 has_change = True

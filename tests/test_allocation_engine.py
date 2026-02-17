@@ -9,6 +9,7 @@ from models.attendance import AttendanceProfile
 from models.building import Floor
 from engine.allocation_engine import (
     compute_recommended_allocation,
+    compute_simple_allocation,
     compute_all_allocations,
     distribute_seats,
     run_allocation,
@@ -131,6 +132,72 @@ class TestRunAllocation:
         total_allocated = sum(r.allocated_seats for r in results)
         assert total_allocated > 0
         assert total_allocated <= 500  # 5 floors * 100 seats
+
+
+class TestSimpleAllocation:
+    def test_basic_flat_allocation(self):
+        unit = make_unit(hc=400, growth=0.0, attrition=0.0)
+        config = {"global_alloc_pct": 0.80, "min_alloc_pct": 0.20, "max_alloc_pct": 1.50}
+        result = compute_simple_allocation(unit, horizon_months=6, rule_config=config)
+
+        assert abs(result.recommended_alloc_pct - 0.80) < 0.01
+        assert result.effective_demand_seats == 320  # 80% of 400
+
+    def test_per_unit_override(self):
+        unit = make_unit(hc=400, growth=0.0, attrition=0.0)
+        unit.seat_alloc_pct = 0.90  # Override to 90%
+        config = {"global_alloc_pct": 0.80, "min_alloc_pct": 0.20, "max_alloc_pct": 1.50}
+        result = compute_simple_allocation(unit, horizon_months=6, rule_config=config)
+
+        assert abs(result.recommended_alloc_pct - 0.90) < 0.01
+        assert result.effective_demand_seats == 360  # 90% of 400
+
+    def test_growth_adjustment(self):
+        unit = make_unit(hc=400, growth=0.15, attrition=0.08)
+        config = {"global_alloc_pct": 0.80, "min_alloc_pct": 0.20, "max_alloc_pct": 1.50}
+        result = compute_simple_allocation(unit, horizon_months=6, rule_config=config)
+
+        # net change = 7%, over 6mo = 3.5%, so alloc = 0.80 * 1.035 = 0.828
+        assert result.recommended_alloc_pct > 0.80
+        assert result.recommended_alloc_pct < 0.85
+
+    def test_clamping_to_min(self):
+        unit = make_unit(hc=400, growth=0.0, attrition=0.30)  # Heavy attrition
+        config = {"global_alloc_pct": 0.30, "min_alloc_pct": 0.20, "max_alloc_pct": 1.50}
+        result = compute_simple_allocation(unit, horizon_months=6, rule_config=config)
+
+        assert result.recommended_alloc_pct >= 0.20
+
+    def test_zero_headcount(self):
+        unit = make_unit(hc=0)
+        config = {"global_alloc_pct": 0.80}
+        result = compute_simple_allocation(unit, horizon_months=6, rule_config=config)
+
+        assert result.recommended_alloc_pct == 0
+        assert result.effective_demand_seats == 0
+
+    def test_mode_routing_simple(self):
+        """compute_all_allocations should use simple mode when configured."""
+        units = [make_unit(hc=200, growth=0.0, attrition=0.0)]
+        att_map = {"Engineering": make_attendance()}
+        config = {"allocation_mode": "simple", "global_alloc_pct": 0.80,
+                  "min_alloc_pct": 0.20, "max_alloc_pct": 1.50}
+
+        results = compute_all_allocations(units, att_map, 6, rule_config=config)
+        assert len(results) == 1
+        # In simple mode, alloc should be exactly 80% (no growth/attrition)
+        assert abs(results[0].recommended_alloc_pct - 0.80) < 0.01
+
+    def test_mode_routing_advanced(self):
+        """compute_all_allocations should use advanced mode when configured."""
+        units = [make_unit(hc=400, growth=0.15, attrition=0.08)]
+        att_map = {"Engineering": make_attendance()}
+        config = {"allocation_mode": "advanced", "min_alloc_pct": 0.20, "max_alloc_pct": 1.50}
+
+        results = compute_all_allocations(units, att_map, 6, rule_config=config)
+        assert len(results) == 1
+        # Advanced mode should NOT be exactly 80% — it derives from attendance
+        assert results[0].recommended_alloc_pct != 0.80
 
 
 if __name__ == "__main__":

@@ -22,6 +22,8 @@ def initialize_session_state():
         "audit_log": [],
         "data_loaded": False,
         "rule_config": {
+            "allocation_mode": "simple",
+            "global_alloc_pct": 0.80,
             "min_alloc_pct": 0.20,
             "max_alloc_pct": 1.50,
             "stability_discount_threshold": 0.7,

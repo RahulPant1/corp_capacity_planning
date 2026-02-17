@@ -256,8 +256,14 @@ def render(sidebar_state):
                     "Growth %": u.hc_growth_pct * 100,
                     "Attrition %": u.attrition_pct * 100,
                     "Priority": u.business_priority or "None",
+                    "Seat Alloc %": (u.seat_alloc_pct * 100) if u.seat_alloc_pct is not None else None,
                 } for u in current_units]
                 unit_edit_df = pd.DataFrame(unit_rows)
+
+                st.caption(
+                    "**Seat Alloc %**: Per-unit allocation override (Simple mode). "
+                    "Leave blank to use the global default."
+                )
 
                 edited_units = st.data_editor(
                     unit_edit_df,
@@ -275,15 +281,18 @@ def render(sidebar_state):
                         new_growth = float(row["Growth %"]) / 100.0
                         new_attrition = float(row["Attrition %"]) / 100.0
                         new_priority = row["Priority"] if row["Priority"] != "None" else None
+                        raw_alloc = row["Seat Alloc %"]
+                        new_seat_alloc = float(raw_alloc) / 100.0 if pd.notna(raw_alloc) else None
 
                         if (new_hc != u.current_total_hc or
                             abs(new_growth - u.hc_growth_pct) > 0.001 or
                             abs(new_attrition - u.attrition_pct) > 0.001 or
-                            new_priority != u.business_priority):
+                            new_priority != u.business_priority or
+                            new_seat_alloc != u.seat_alloc_pct):
                             add_audit_entry(
                                 "edit_base_data", "baseline", "unit_data",
                                 f"HC={u.current_total_hc},G={u.hc_growth_pct:.1%},A={u.attrition_pct:.1%}",
-                                f"HC={new_hc},G={new_growth:.1%},A={new_attrition:.1%}",
+                                f"HC={new_hc},G={new_growth:.1%},A={new_attrition:.1%},Alloc={new_seat_alloc}",
                                 unit_name=u.unit_name,
                                 rationale="Manual unit data edit",
                             )
@@ -291,6 +300,7 @@ def render(sidebar_state):
                             u.hc_growth_pct = new_growth
                             u.attrition_pct = new_attrition
                             u.business_priority = new_priority
+                            u.seat_alloc_pct = new_seat_alloc
                             changed = True
                     if changed:
                         set_units(current_units)
@@ -306,6 +316,38 @@ def render(sidebar_state):
 
     config = get_rule_config()
 
+    # Allocation mode toggle
+    alloc_mode_options = ["Simple", "Advanced"]
+    current_mode = config.get("allocation_mode", "simple")
+    alloc_mode = st.radio(
+        "Allocation Mode",
+        alloc_mode_options,
+        index=0 if current_mode == "simple" else 1,
+        horizontal=True,
+        key="cfg_alloc_mode",
+        help="**Simple**: Uses a flat allocation % (global or per-unit). "
+             "**Advanced**: Derives allocation from attendance data (median, peak, RTO, stability).",
+    )
+    alloc_mode_value = "simple" if alloc_mode == "Simple" else "advanced"
+
+    # Global allocation % — always visible
+    global_alloc_pct = st.slider(
+        "Global Seat Allocation %",
+        min_value=0.50, max_value=1.00,
+        value=config.get("global_alloc_pct", 0.80),
+        step=0.05,
+        key="cfg_global_alloc_pct",
+        help="Default allocation % applied to all units in Simple mode. "
+             "Per-unit overrides (set in Edit Base Data) take precedence.",
+    )
+
+    if alloc_mode_value == "simple":
+        st.caption(
+            "Simple mode: Each unit gets the global allocation % of their headcount as seats, "
+            "adjusted for growth/attrition over the planning horizon. "
+            "Set per-unit overrides in Edit Base Data > Unit Headcount > Seat Alloc % column."
+        )
+
     with st.expander("Allocation Policy Bounds", expanded=False):
         col1, col2 = st.columns(2)
         with col1:
@@ -319,33 +361,42 @@ def render(sidebar_state):
                 step=0.05, key="cfg_max_alloc",
             )
 
-    with st.expander("Buffer & Scaling Parameters", expanded=False):
-        col1, col2 = st.columns(2)
-        with col1:
-            stability_threshold = st.slider(
-                "Stability Discount Threshold", 0.0, 1.0,
-                config.get("stability_discount_threshold", 0.7),
-                step=0.05, key="cfg_stability_threshold",
-            )
-            stability_discount = st.slider(
-                "Stability Discount Factor", 0.0, 1.0,
-                config.get("stability_discount_factor", 0.30),
-                step=0.05, key="cfg_stability_discount",
-            )
-        with col2:
-            buffer_mult = st.slider(
-                "Peak Buffer Multiplier", 0.5, 2.0,
-                config.get("peak_buffer_multiplier", 1.0),
-                step=0.1, key="cfg_buffer_mult",
-            )
-            shrink_factor = st.slider(
-                "Shrink Contribution Factor", 0.0, 1.0,
-                config.get("shrink_contribution_factor", 0.5),
-                step=0.1, key="cfg_shrink_factor",
-            )
+    # Buffer & Scaling — only shown in Advanced mode
+    stability_threshold = config.get("stability_discount_threshold", 0.7)
+    stability_discount = config.get("stability_discount_factor", 0.30)
+    buffer_mult = config.get("peak_buffer_multiplier", 1.0)
+    shrink_factor = config.get("shrink_contribution_factor", 0.5)
+
+    if alloc_mode_value == "advanced":
+        with st.expander("Buffer & Scaling Parameters (Advanced)", expanded=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                stability_threshold = st.slider(
+                    "Stability Discount Threshold", 0.0, 1.0,
+                    config.get("stability_discount_threshold", 0.7),
+                    step=0.05, key="cfg_stability_threshold",
+                )
+                stability_discount = st.slider(
+                    "Stability Discount Factor", 0.0, 1.0,
+                    config.get("stability_discount_factor", 0.30),
+                    step=0.05, key="cfg_stability_discount",
+                )
+            with col2:
+                buffer_mult = st.slider(
+                    "Peak Buffer Multiplier", 0.5, 2.0,
+                    config.get("peak_buffer_multiplier", 1.0),
+                    step=0.1, key="cfg_buffer_mult",
+                )
+                shrink_factor = st.slider(
+                    "Shrink Contribution Factor", 0.0, 1.0,
+                    config.get("shrink_contribution_factor", 0.5),
+                    step=0.1, key="cfg_shrink_factor",
+                )
 
     if st.button("Save Rule Configuration"):
         new_config = {
+            "allocation_mode": alloc_mode_value,
+            "global_alloc_pct": global_alloc_pct,
             "min_alloc_pct": min_alloc,
             "max_alloc_pct": max_alloc,
             "stability_discount_threshold": stability_threshold,

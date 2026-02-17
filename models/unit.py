@@ -9,6 +9,7 @@ class Unit:
     hc_growth_pct: float          # e.g. 0.10 for 10%
     attrition_pct: float          # e.g. 0.05 for 5%
     business_priority: Optional[str] = None  # "High", "Medium", "Low"
+    seat_alloc_pct: Optional[float] = None   # Per-unit alloc % override (simple mode)
 
     @property
     def net_hc_change_pct(self) -> float:

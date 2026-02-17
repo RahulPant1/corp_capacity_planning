@@ -185,15 +185,60 @@ After running, review the before/after comparison. Click **"Accept & Apply"** to
 ### Tab 6: Admin & Governance
 
 - **Data Upload** — upload a single Excel file (3 tabs) or three separate files, or load sample data
-- **Rule Configuration** — adjust allocation policy bounds, buffer multipliers, stability thresholds
+- **Edit Base Data** — modify floor capacities, unit headcounts, and per-unit seat allocation %
+- **Rule Configuration** — choose allocation mode (Simple/Advanced), set global allocation %, adjust policy bounds
 - **Scenario Management** — create, lock, unlock, or delete scenarios
 - **Audit Trail** — view and export a log of all changes, overrides, and actions
+
+---
+
+## Allocation Modes
+
+The application supports two allocation modes, selectable in **Admin & Governance > Rule Configuration**.
+
+### Simple Mode (Default)
+
+Best for quick POCs and business discussions. Each unit is allocated a flat percentage of their headcount as seats.
+
+| Step | Formula | Example |
+|------|---------|---------|
+| 1. **Base allocation %** | Global default (e.g., 80%) or per-unit override | 80% |
+| 2. **Growth/attrition adjustment** | Base % × (1 + net HC change × months / 12) | 80% × 1.035 = 82.8% |
+| 3. **Policy clamp** | Clamped to [min, max] allocation bounds | 82.8% (within bounds) |
+| 4. **Effective demand** | Clamped % × Current headcount | 82.8% × 400 = 331 seats |
+
+**Key settings:**
+- **Global Seat Allocation %** (default 80%) — the company-wide default. Set in Rule Configuration.
+- **Per-unit Seat Alloc %** — override the global default for specific units (e.g., Engineering at 90%). Set in Edit Base Data > Unit Headcount > "Seat Alloc %" column. Leave blank to use the global default.
+
+Attendance data (median, peak, RTO, stability) is still uploaded and shown in dashboards, but is **not used** for allocation calculation in Simple mode.
+
+### Advanced Mode
+
+Full attendance-based formula for organizations that want behavior-aware planning. Toggle to "Advanced" in Rule Configuration to enable.
+
+Uses a 6-step formula:
+1. **Base demand** = Monthly median in-office strength / Total headcount
+2. **Peak buffer** = (Max HC - Median HC) / Total HC, reduced for stable units
+3. **RTO scaling** = Base demand × (Avg RTO days / 5)
+4. **Growth adjustment** = Scaled demand × (1 + net HC change × months / 12)
+5. **Final allocation %** = Growth-adjusted demand + peak buffer, clamped to policy bounds
+6. **Effective demand (seats)** = Allocation % × Current headcount
+
+Advanced mode shows additional configuration parameters for buffer and scaling (see below).
 
 ---
 
 ## Configuration Parameters
 
 These are adjustable in **Admin & Governance > Rule Configuration**.
+
+### Allocation Mode & Global Settings
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| **Allocation Mode** | Simple | **Simple**: flat % allocation (global or per-unit). **Advanced**: derives allocation from attendance data. |
+| **Global Seat Allocation %** | 80% | The company-wide default seat allocation as a percentage of headcount. Used as the base in Simple mode. Per-unit overrides (set in Edit Base Data) take precedence. |
 
 ### Allocation Policy Bounds
 
@@ -202,7 +247,9 @@ These are adjustable in **Admin & Governance > Rule Configuration**.
 | **Minimum Allocation %** | 20% | The lowest allocation percentage any unit can receive. Even if a unit's calculated demand is very low, it won't go below this floor. Prevents units from being effectively zeroed out. |
 | **Maximum Allocation %** | 150% | The highest allocation percentage any unit can receive. Caps over-allocation for fast-growing or peak-heavy units. Values above 100% mean the unit gets more seats than its current headcount. |
 
-### Buffer & Scaling Parameters
+### Buffer & Scaling Parameters (Advanced Mode Only)
+
+These parameters are only visible and used when Allocation Mode is set to "Advanced".
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -233,16 +280,9 @@ These are adjustable in **Admin & Governance > Rule Configuration**.
 
 ## How Allocation Works
 
-The system derives a recommended allocation % per unit using this formula:
+The allocation formula depends on the selected mode (see [Allocation Modes](#allocation-modes) above).
 
-1. **Base demand** = Monthly median in-office strength / Total headcount
-2. **Peak buffer** = (Max HC - Median HC) / Total HC, reduced for stable units
-3. **RTO scaling** = Base demand × (Avg RTO days / 5)
-4. **Growth adjustment** = Scaled demand × (1 + net HC change × months / 12)
-5. **Final allocation %** = Growth-adjusted demand + peak buffer, clamped to policy bounds
-6. **Effective demand (seats)** = Allocation % × Current headcount
-
-When total demand exceeds supply (scarcity):
+**In both modes**, when total demand exceeds supply (scarcity):
 - Units are prioritized by business priority, then by net growth
 - Shrinking units release a portion of their allocation back to the pool
 - Remaining seats are distributed proportionally
@@ -333,7 +373,8 @@ The app includes 5 pre-built scenario templates available under **Admin & Govern
 
 You can also modify the underlying baseline data directly in **Admin & Governance > Edit Base Data**:
 - **Floor Capacities** — change Total Seats for any floor (e.g., after a renovation)
-- **Unit Headcount** — update HC, growth %, attrition %, or priority for any unit
+- **Unit Headcount** — update HC, growth %, attrition %, priority, or **Seat Alloc %** for any unit
+  - **Seat Alloc %** is a per-unit allocation override used in Simple mode. Leave blank to use the global default. Example: set Engineering to 90% if they need more in-office seats than the company default.
 
 Changes are logged in the audit trail and take effect immediately for all future simulations.
 

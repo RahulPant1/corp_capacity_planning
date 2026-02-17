@@ -1,5 +1,11 @@
 """Default configuration constants for the CPG Seat Planning Platform."""
 
+# Allocation mode: "simple" (flat %) or "advanced" (attendance-based formula)
+ALLOCATION_MODE = "simple"
+
+# Global seat allocation % (used in simple mode as default for all units)
+DEFAULT_GLOBAL_ALLOC_PCT = 0.80
+
 # Allocation policy bounds
 MIN_ALLOC_PCT = 0.20  # Minimum allocation percentage per unit
 MAX_ALLOC_PCT = 1.50  # Maximum allocation percentage per unit

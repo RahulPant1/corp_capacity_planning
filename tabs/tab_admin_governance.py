@@ -17,7 +17,7 @@ from data.session_store import (
     set_rule_config, add_audit_entry, is_data_loaded, set_last_data_edit,
 )
 from models.scenario import Scenario, ScenarioParams
-from config.defaults import SCENARIO_TYPES
+from config.defaults import SCENARIO_TYPES, PLANNING_BUFFER_PRESETS, DEFAULT_PLANNING_BUFFER
 
 
 def _load_and_validate(buildings_df, units_df, attendance_df):
@@ -201,9 +201,9 @@ def render(sidebar_state):
     # --- Base Data Editor ---
     if is_data_loaded():
         st.subheader("Edit Base Data")
-        st.caption("Modify floor capacities or unit headcounts directly. Changes update the baseline immediately.")
+        st.caption("Modify floor capacities, unit headcounts, or attendance data directly. Changes update the baseline immediately.")
 
-        edit_tab1, edit_tab2 = st.tabs(["Floor Capacities", "Unit Headcount"])
+        edit_tab1, edit_tab2, edit_tab3 = st.tabs(["Floor Capacities", "Unit Headcount", "Attendance & RTO"])
 
         with edit_tab1:
             from data.session_store import get_floors, set_floors
@@ -311,6 +311,63 @@ def render(sidebar_state):
                     else:
                         st.info("No changes detected.")
 
+        with edit_tab3:
+            from data.session_store import get_attendance, set_attendance
+            current_attendance = get_attendance()
+            if current_attendance:
+                att_rows = [{
+                    "Unit Name": a.unit_name,
+                    "Median In-Office HC": a.monthly_median_hc,
+                    "Max In-Office HC": a.monthly_max_hc,
+                    "Avg RTO Days/Week": a.avg_rto_days_per_week,
+                } for a in current_attendance]
+                att_edit_df = pd.DataFrame(att_rows)
+
+                st.caption(
+                    "Attendance and RTO behavior data. Used in Advanced mode allocation "
+                    "and RTO utilization alerts in both modes."
+                )
+
+                edited_att = st.data_editor(
+                    att_edit_df,
+                    disabled=["Unit Name"],
+                    use_container_width=True,
+                    key="edit_attendance",
+                    num_rows="fixed",
+                )
+
+                if st.button("Save Attendance Changes", key="btn_save_attendance"):
+                    changed = False
+                    for i, a in enumerate(current_attendance):
+                        row = edited_att.iloc[i]
+                        new_median = float(row["Median In-Office HC"])
+                        new_max = float(row["Max In-Office HC"])
+                        new_rto = float(row["Avg RTO Days/Week"])
+
+                        if (abs(new_median - a.monthly_median_hc) > 0.01 or
+                            abs(new_max - a.monthly_max_hc) > 0.01 or
+                            abs(new_rto - a.avg_rto_days_per_week) > 0.01):
+                            add_audit_entry(
+                                "edit_base_data", "baseline", "attendance",
+                                f"Median={a.monthly_median_hc},Max={a.monthly_max_hc},"
+                                f"RTO={a.avg_rto_days_per_week}",
+                                f"Median={new_median},Max={new_max},"
+                                f"RTO={new_rto}",
+                                unit_name=a.unit_name,
+                                rationale="Manual attendance data edit",
+                            )
+                            a.monthly_median_hc = new_median
+                            a.monthly_max_hc = new_max
+                            a.avg_rto_days_per_week = new_rto
+                            changed = True
+                    if changed:
+                        set_attendance(current_attendance)
+                        set_last_data_edit()
+                        st.success("Attendance data updated.")
+                        st.rerun()
+                    else:
+                        st.info("No changes detected.")
+
     st.divider()
 
     # --- Rule Configuration ---
@@ -318,37 +375,22 @@ def render(sidebar_state):
 
     config = get_rule_config()
 
-    # Allocation mode toggle
-    alloc_mode_options = ["Simple", "Advanced"]
-    current_mode = config.get("allocation_mode", "simple")
-    alloc_mode = st.radio(
-        "Allocation Mode",
-        alloc_mode_options,
-        index=0 if current_mode == "simple" else 1,
-        horizontal=True,
-        key="cfg_alloc_mode",
-        help="**Simple**: Uses a flat allocation % (global or per-unit). "
-             "**Advanced**: Derives allocation from attendance data (median, peak, RTO, stability).",
-    )
-    alloc_mode_value = "simple" if alloc_mode == "Simple" else "advanced"
-
-    # Global allocation % — always visible
+    # Global allocation %
     global_alloc_pct = st.slider(
         "Global Seat Allocation %",
         min_value=0.50, max_value=1.00,
         value=config.get("global_alloc_pct", 0.80),
         step=0.05,
         key="cfg_global_alloc_pct",
-        help="Default allocation % applied to all units in Simple mode. "
+        help="Default allocation % applied to all units. "
              "Per-unit overrides (set in Edit Base Data) take precedence.",
     )
 
-    if alloc_mode_value == "simple":
-        st.caption(
-            "Simple mode: Each unit gets the global allocation % of their headcount as seats, "
-            "adjusted for growth/attrition over the planning horizon. "
-            "Set per-unit overrides in Edit Base Data > Unit Headcount > Seat Alloc % column."
-        )
+    st.caption(
+        "Each unit gets the global allocation % of their headcount as seats, "
+        "adjusted for growth/attrition over the planning horizon. "
+        "Attendance data (Median HC, Max HC, RTO) is used for post-allocation validation."
+    )
 
     with st.expander("Allocation Policy Bounds", expanded=False):
         col1, col2 = st.columns(2)
@@ -363,37 +405,25 @@ def render(sidebar_state):
                 step=0.05, key="cfg_max_alloc",
             )
 
-    # Buffer & Scaling — only shown in Advanced mode
-    stability_threshold = config.get("stability_discount_threshold", 0.7)
-    stability_discount = config.get("stability_discount_factor", 0.30)
-    buffer_mult = config.get("peak_buffer_multiplier", 1.0)
-    shrink_factor = config.get("shrink_contribution_factor", 0.5)
+    # Planning Buffer — controls validation sensitivity
+    planning_buffer_level = config.get("planning_buffer_level", DEFAULT_PLANNING_BUFFER)
 
-    if alloc_mode_value == "advanced":
-        with st.expander("Buffer & Scaling Parameters (Advanced)", expanded=False):
-            col1, col2 = st.columns(2)
-            with col1:
-                stability_threshold = st.slider(
-                    "Stability Discount Threshold", 0.0, 1.0,
-                    config.get("stability_discount_threshold", 0.7),
-                    step=0.05, key="cfg_stability_threshold",
-                )
-                stability_discount = st.slider(
-                    "Stability Discount Factor", 0.0, 1.0,
-                    config.get("stability_discount_factor", 0.30),
-                    step=0.05, key="cfg_stability_discount",
-                )
-            with col2:
-                buffer_mult = st.slider(
-                    "Peak Buffer Multiplier", 0.5, 2.0,
-                    config.get("peak_buffer_multiplier", 1.0),
-                    step=0.1, key="cfg_buffer_mult",
-                )
-                shrink_factor = st.slider(
-                    "Shrink Contribution Factor", 0.0, 1.0,
-                    config.get("shrink_contribution_factor", 0.5),
-                    step=0.1, key="cfg_shrink_factor",
-                )
+    buffer_labels = {
+        "lean": "Lean — tighter validation, plan for typical attendance",
+        "balanced": "Balanced — standard buffer for peak days (default)",
+        "conservative": "Conservative — extra cushion for worst-case attendance",
+    }
+    planning_buffer_level = st.radio(
+        "Planning Buffer",
+        options=list(buffer_labels.keys()),
+        format_func=lambda k: buffer_labels[k],
+        index=list(buffer_labels.keys()).index(planning_buffer_level)
+              if planning_buffer_level in buffer_labels else 1,
+        key="cfg_planning_buffer",
+        help="Controls how much headroom is expected in post-allocation validation. "
+             "Lean = minimal buffer, Conservative = maximum buffer. "
+             "Attendance data (Median HC, Max HC, RTO) is always used.",
+    )
 
     # RTO Utilization Alert Threshold
     rto_util_threshold_int = st.slider(
@@ -408,15 +438,16 @@ def render(sidebar_state):
     rto_util_threshold = rto_util_threshold_int / 100.0
 
     if st.button("Save Rule Configuration"):
+        # Expand planning buffer preset into individual engine params
+        buffer_params = PLANNING_BUFFER_PRESETS.get(planning_buffer_level,
+                                                     PLANNING_BUFFER_PRESETS[DEFAULT_PLANNING_BUFFER])
         new_config = {
-            "allocation_mode": alloc_mode_value,
+            "allocation_mode": "simple",
             "global_alloc_pct": global_alloc_pct,
             "min_alloc_pct": min_alloc,
             "max_alloc_pct": max_alloc,
-            "stability_discount_threshold": stability_threshold,
-            "stability_discount_factor": stability_discount,
-            "peak_buffer_multiplier": buffer_mult,
-            "shrink_contribution_factor": shrink_factor,
+            "planning_buffer_level": planning_buffer_level,
+            **buffer_params,
             "rto_utilization_threshold": rto_util_threshold,
         }
         set_rule_config(new_config)

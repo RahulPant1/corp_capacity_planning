@@ -16,7 +16,7 @@ def make_unit(name="Eng", hc=200, growth=0.10, attrition=0.05):
 
 
 def make_attendance(name="Eng", median=140, max_hc=170, rto=3.5):
-    return AttendanceProfile(name, median, max_hc, rto, 0.7)
+    return AttendanceProfile(name, median, max_hc, rto)
 
 
 def make_floor(tower="B1-T1", floor_num=1, seats=100):

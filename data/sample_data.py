@@ -29,12 +29,12 @@ def generate_units_df() -> pd.DataFrame:
     profiles = [
         {"Unit Name": "Engineering",  "Current Total Headcount": 400, "HC Growth Forecast (%)": 15, "Attrition Forecast (%)": 8,  "Business Priority": "High"},
         {"Unit Name": "Product",      "Current Total Headcount": 150, "HC Growth Forecast (%)": 10, "Attrition Forecast (%)": 5,  "Business Priority": "High"},
-        {"Unit Name": "Sales",        "Current Total Headcount": 300, "HC Growth Forecast (%)": 5,  "Attrition Forecast (%)": 12, "Business Priority": "Medium"},
-        {"Unit Name": "Marketing",    "Current Total Headcount": 120, "HC Growth Forecast (%)": 8,  "Attrition Forecast (%)": 6,  "Business Priority": "Medium"},
-        {"Unit Name": "Finance",      "Current Total Headcount": 80,  "HC Growth Forecast (%)": 2,  "Attrition Forecast (%)": 3,  "Business Priority": "Low"},
-        {"Unit Name": "HR",           "Current Total Headcount": 60,  "HC Growth Forecast (%)": 3,  "Attrition Forecast (%)": 4,  "Business Priority": "Low"},
-        {"Unit Name": "Legal",        "Current Total Headcount": 40,  "HC Growth Forecast (%)": 1,  "Attrition Forecast (%)": 2,  "Business Priority": "Low"},
-        {"Unit Name": "Operations",   "Current Total Headcount": 200, "HC Growth Forecast (%)": -2, "Attrition Forecast (%)": 10, "Business Priority": "Medium"},
+        {"Unit Name": "Sales",        "Current Total Headcount": 300, "HC Growth Forecast (%)": 5,  "Attrition Forecast (%)": 12, "Business Priority": "High"},
+        {"Unit Name": "Marketing",    "Current Total Headcount": 120, "HC Growth Forecast (%)": 8,  "Attrition Forecast (%)": 6,  "Business Priority": "High"},
+        {"Unit Name": "Finance",      "Current Total Headcount": 80,  "HC Growth Forecast (%)": 2,  "Attrition Forecast (%)": 3,  "Business Priority": "High"},
+        {"Unit Name": "HR",           "Current Total Headcount": 60,  "HC Growth Forecast (%)": 3,  "Attrition Forecast (%)": 4,  "Business Priority": "High"},
+        {"Unit Name": "Legal",        "Current Total Headcount": 40,  "HC Growth Forecast (%)": 1,  "Attrition Forecast (%)": 2,  "Business Priority": "High"},
+        {"Unit Name": "Operations",   "Current Total Headcount": 200, "HC Growth Forecast (%)": -2, "Attrition Forecast (%)": 10, "Business Priority": "High"},
     ]
     return pd.DataFrame(profiles)
 
@@ -52,13 +52,11 @@ def generate_attendance_df() -> pd.DataFrame:
         median_ratio = rto / 5.0 * random.uniform(0.85, 1.0)
         median = round(hc * median_ratio)
         max_hc = round(median * random.uniform(1.1, 1.4))
-        stability = round(random.uniform(0.4, 0.95), 2)
         rows.append({
             "Unit Name": unit_name,
             "Monthly Median In-Office Strength": median,
             "Monthly Max In-Office Strength": max_hc,
             "Avg RTO Days/Week": rto,
-            "Attendance Stability": stability,
         })
     return pd.DataFrame(rows)
 

@@ -5,7 +5,8 @@ from models.building import Floor
 from models.allocation import AllocationRecommendation, FloorAssignment
 from config.defaults import (
     ADJACENCY_BONUS_SAME_FLOOR, ADJACENCY_BONUS_ADJACENT_FLOOR,
-    ADJACENCY_BONUS_SAME_TOWER, ADJACENCY_BONUS_CROSS_TOWER,
+    ADJACENCY_BONUS_SAME_TOWER, ADJACENCY_BONUS_SAME_BUILDING,
+    ADJACENCY_BONUS_CROSS_BUILDING,
     FRAGMENTATION_PENALTY_PER_FLOOR,
 )
 
@@ -15,7 +16,10 @@ def compute_adjacency_tier(
     existing_assignments: List[FloorAssignment],
     unit_name: str,
 ) -> Tuple[str, int]:
-    """Determine adjacency tier and bonus for placing a unit on a floor."""
+    """Determine adjacency tier and bonus for placing a unit on a floor.
+
+    Tier hierarchy: same_floor > adjacent > same_tower > same_building > cross_building > new_placement
+    """
     unit_floors = [a for a in existing_assignments if a.unit_name == unit_name]
 
     if not unit_floors:
@@ -33,7 +37,21 @@ def compute_adjacency_tier(
         if a.tower_id == floor.tower_id:
             return "same_tower", ADJACENCY_BONUS_SAME_TOWER
 
-    return "cross_tower", ADJACENCY_BONUS_CROSS_TOWER
+    for a in unit_floors:
+        if a.building_id == floor.building_id:
+            return "same_building", ADJACENCY_BONUS_SAME_BUILDING
+
+    return "cross_building", ADJACENCY_BONUS_CROSS_BUILDING
+
+
+_TIER_WEIGHTS = {
+    "same_floor": 5000,
+    "adjacent": 4000,
+    "same_tower": 3000,
+    "same_building": 2000,
+    "cross_building": 1000,
+    "new_placement": 500,
+}
 
 
 def score_floor_for_unit(
@@ -43,14 +61,19 @@ def score_floor_for_unit(
     unit_name: str,
     floors_used_by_unit: int,
 ) -> float:
-    """Score a candidate floor for placing a unit's seats."""
+    """Score a candidate floor for placing a unit's seats.
+
+    Adjacency tier is the primary factor (building > tower > floor cohesion).
+    Available seats and fragmentation are tiebreakers within the same tier.
+    """
     if available_seats <= 0:
         return -999999
 
-    _, adjacency_bonus = compute_adjacency_tier(floor, existing_assignments, unit_name)
+    tier, _ = compute_adjacency_tier(floor, existing_assignments, unit_name)
+    tier_bonus = _TIER_WEIGHTS.get(tier, 0)
     fragmentation_penalty = floors_used_by_unit * FRAGMENTATION_PENALTY_PER_FLOOR
 
-    score = available_seats * 10 + adjacency_bonus - fragmentation_penalty
+    score = tier_bonus + available_seats * 10 - fragmentation_penalty
     return score
 
 

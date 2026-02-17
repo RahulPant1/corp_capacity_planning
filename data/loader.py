@@ -42,15 +42,11 @@ def parse_attendance(df: pd.DataFrame) -> List[AttendanceProfile]:
     """Convert an attendance DataFrame into AttendanceProfile objects."""
     profiles = []
     for _, row in df.iterrows():
-        stability = None
-        if "Attendance Stability" in df.columns and pd.notna(row.get("Attendance Stability")):
-            stability = float(row["Attendance Stability"])
         profiles.append(AttendanceProfile(
             unit_name=str(row["Unit Name"]).strip(),
             monthly_median_hc=float(row["Monthly Median In-Office Strength"]),
             monthly_max_hc=float(row["Monthly Max In-Office Strength"]),
             avg_rto_days_per_week=float(row["Avg RTO Days/Week"]),
-            attendance_stability=stability,
         ))
     return profiles
 

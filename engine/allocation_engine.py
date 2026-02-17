@@ -8,7 +8,6 @@ from models.building import Floor
 from engine.explainer import explain_allocation, explain_simple_allocation
 from config.defaults import (
     MIN_ALLOC_PCT, MAX_ALLOC_PCT,
-    STABILITY_DISCOUNT_THRESHOLD, STABILITY_DISCOUNT_FACTOR,
     PEAK_BUFFER_MULTIPLIER, SHRINK_CONTRIBUTION_FACTOR,
     PRIORITY_ORDER, WORKING_DAYS_PER_WEEK,
     ALLOCATION_MODE, DEFAULT_GLOBAL_ALLOC_PCT,
@@ -25,8 +24,6 @@ def compute_recommended_allocation(
     cfg = rule_config or {}
     min_alloc = cfg.get("min_alloc_pct", MIN_ALLOC_PCT)
     max_alloc = cfg.get("max_alloc_pct", MAX_ALLOC_PCT)
-    stability_threshold = cfg.get("stability_discount_threshold", STABILITY_DISCOUNT_THRESHOLD)
-    stability_discount = cfg.get("stability_discount_factor", STABILITY_DISCOUNT_FACTOR)
     buffer_multiplier = cfg.get("peak_buffer_multiplier", PEAK_BUFFER_MULTIPLIER)
 
     hc = unit.current_total_hc
@@ -48,11 +45,6 @@ def compute_recommended_allocation(
     peak_buffer = (attendance.monthly_max_hc - attendance.monthly_median_hc) / hc
     peak_buffer *= buffer_multiplier
 
-    stability = attendance.attendance_stability or 0.5
-    adj_peak_buffer = peak_buffer
-    if stability > stability_threshold:
-        adj_peak_buffer = peak_buffer * (1 - stability_discount)
-
     # Step 3: RTO scaling (scale base, not peak buffer)
     rto_factor = attendance.avg_rto_days_per_week / WORKING_DAYS_PER_WEEK
     scaled_ratio = base_ratio * rto_factor
@@ -63,7 +55,7 @@ def compute_recommended_allocation(
     growth_adjusted = scaled_ratio * horizon_factor
 
     # Step 5: Combine
-    raw_alloc_pct = growth_adjusted + adj_peak_buffer
+    raw_alloc_pct = growth_adjusted + peak_buffer
     was_clamped = raw_alloc_pct < min_alloc or raw_alloc_pct > max_alloc
     recommended_alloc_pct = max(min_alloc, min(max_alloc, raw_alloc_pct))
 
@@ -76,13 +68,11 @@ def compute_recommended_allocation(
         monthly_median_hc=attendance.monthly_median_hc,
         monthly_max_hc=attendance.monthly_max_hc,
         avg_rto_days=attendance.avg_rto_days_per_week,
-        attendance_stability=stability,
         hc_growth_pct=unit.hc_growth_pct,
         attrition_pct=unit.attrition_pct,
         horizon_months=horizon_months,
         base_ratio=base_ratio,
         peak_buffer=peak_buffer,
-        adj_peak_buffer=adj_peak_buffer,
         rto_factor=rto_factor,
         scaled_ratio=scaled_ratio,
         horizon_factor=horizon_factor,
@@ -175,25 +165,10 @@ def compute_all_allocations(
     horizon_months: int,
     rule_config: Optional[dict] = None,
 ) -> List[AllocationRecommendation]:
-    """Compute recommended allocation for all units. Routes by allocation_mode."""
-    cfg = rule_config or {}
-    mode = cfg.get("allocation_mode", ALLOCATION_MODE)
-
+    """Compute recommended allocation for all units using flat % allocation."""
     results = []
     for unit in units:
-        if mode == "simple":
-            results.append(compute_simple_allocation(unit, horizon_months, rule_config))
-        else:
-            att = attendance_map.get(unit.unit_name)
-            if att is None:
-                att = AttendanceProfile(
-                    unit_name=unit.unit_name,
-                    monthly_median_hc=unit.current_total_hc * 0.6,
-                    monthly_max_hc=unit.current_total_hc * 0.8,
-                    avg_rto_days_per_week=3.0,
-                    attendance_stability=0.5,
-                )
-            results.append(compute_recommended_allocation(unit, att, horizon_months, rule_config))
+        results.append(compute_simple_allocation(unit, horizon_months, rule_config))
     return results
 
 
@@ -276,16 +251,16 @@ def compute_rto_alerts(
 ) -> List[dict]:
     """Compute RTO utilization alerts for all units.
 
-    Simple mode: expected_seats = (avg_rto_days / 5) * current_hc
-    Advanced mode: expected_seats = monthly_median_hc + stability-adjusted peak buffer
+    IMPORTANT: Pass scenario-modified attendance (with RTO mandate applied) for accurate results.
+
+    Uses attendance data (median HC, max HC, RTO days) to compute expected seats:
+      expected_seats = (monthly_median_hc + peak_buffer) * (rto_days / 5)
+    Falls back to (rto_days / 5) * HC when no attendance data is available.
 
     Returns list of dicts with: unit_name, expected_seats, allocated_seats, gap_pct, status
     """
     cfg = rule_config or {}
-    mode = cfg.get("allocation_mode", ALLOCATION_MODE)
     threshold = cfg.get("rto_utilization_threshold", 0.20)
-    stability_thresh = cfg.get("stability_discount_threshold", STABILITY_DISCOUNT_THRESHOLD)
-    stability_discount = cfg.get("stability_discount_factor", STABILITY_DISCOUNT_FACTOR)
     buffer_mult = cfg.get("peak_buffer_multiplier", PEAK_BUFFER_MULTIPLIER)
 
     unit_map = {u.unit_name: u for u in units}
@@ -298,19 +273,15 @@ def compute_rto_alerts(
         if not unit or unit.current_total_hc == 0:
             continue
 
-        if mode == "simple":
-            rto_days = att.avg_rto_days_per_week if att else 3.0
-            expected_seats = round((rto_days / WORKING_DAYS_PER_WEEK) * unit.current_total_hc)
-        else:
-            # Advanced mode: use median + stability-adjusted peak buffer
-            if not att:
-                continue
+        if att:
+            # Use attendance data: median + peak buffer, scaled by RTO
             base_expected = att.monthly_median_hc
             peak_buffer = (att.monthly_max_hc - att.monthly_median_hc) * buffer_mult
-            stability = att.attendance_stability or 0.5
-            if stability > stability_thresh:
-                peak_buffer *= (1 - stability_discount)
-            expected_seats = round(base_expected + peak_buffer)
+            rto_factor = att.avg_rto_days_per_week / WORKING_DAYS_PER_WEEK
+            expected_seats = round((base_expected + peak_buffer) * rto_factor)
+        else:
+            # Fallback when no attendance data
+            expected_seats = round((3.0 / WORKING_DAYS_PER_WEEK) * unit.current_total_hc)
 
         if expected_seats == 0:
             continue
@@ -334,3 +305,24 @@ def compute_rto_alerts(
         })
 
     return alerts
+
+
+def compute_rto_compliance(
+    attendance_map: Dict[str, AttendanceProfile],
+    global_rto_target: float,
+) -> List[dict]:
+    """Flag units whose avg RTO days are below the global target.
+
+    Returns list of dicts with: unit_name, actual_rto, target_rto, gap_days, compliant
+    """
+    results = []
+    for unit_name, att in sorted(attendance_map.items()):
+        gap = att.avg_rto_days_per_week - global_rto_target
+        results.append({
+            "unit_name": unit_name,
+            "actual_rto": att.avg_rto_days_per_week,
+            "target_rto": global_rto_target,
+            "gap_days": gap,
+            "compliant": gap >= 0,
+        })
+    return results

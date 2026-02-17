@@ -104,6 +104,33 @@ def unit_floor_heatmap(
     return fig
 
 
+def rto_need_vs_allocated_bar(rto_data: List[dict]) -> go.Figure:
+    """Grouped bar chart comparing RTO-based need vs allocated seats per unit."""
+    df = pd.DataFrame(rto_data)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        name="Allocated",
+        x=df["unit_name"],
+        y=df["allocated_seats"],
+        marker_color="#4A90D9",
+    ))
+    fig.add_trace(go.Bar(
+        name="RTO Need",
+        x=df["unit_name"],
+        y=df["expected_seats"],
+        marker_color="#E8734A",
+    ))
+    fig.update_layout(
+        barmode="group",
+        title="Allocated Seats vs RTO-Based Need by Unit",
+        xaxis_title="Unit",
+        yaxis_title="Seats",
+        height=400,
+        legend_title_text="",
+    )
+    return fig
+
+
 def scenario_comparison_bar(comparison_df: pd.DataFrame) -> go.Figure:
     """Bar chart comparing seat allocations across two scenarios."""
     fig = go.Figure()

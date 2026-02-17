@@ -8,10 +8,10 @@ from data.session_store import (
     get_rule_config, is_data_loaded, get_last_data_edit,
 )
 from components.metrics_cards import render_metric_row
-from components.charts import capacity_vs_demand_bar, utilization_donut
+from components.charts import capacity_vs_demand_bar, utilization_donut, rto_need_vs_allocated_bar
 from engine.spatial import get_floor_utilization
 from engine.allocation_engine import compute_rto_alerts
-from engine.scenario_engine import apply_floor_modifications
+from engine.scenario_engine import apply_floor_modifications, apply_overrides
 from config.defaults import FLOOR_SATURATION_THRESHOLD, UNIT_SHORTFALL_THRESHOLD
 
 
@@ -106,16 +106,19 @@ def render(sidebar_state):
     # --- Alerts ---
     st.subheader("Planning Alerts")
 
-    alerts = []
+    # Collect alerts by category
+    capacity_alerts = []
+    rto_alerts_list = []
+    other_alerts = []
 
     # Floor saturation alerts
     for fu in floor_util:
         if fu["utilization_pct"] > FLOOR_SATURATION_THRESHOLD:
-            alerts.append({
-                "Type": "Floor Saturated",
-                "Detail": f"{fu['floor_id']}: {fu['utilization_pct']:.0%} utilized "
-                          f"({fu['used_seats']}/{fu['total_seats']} seats)",
-                "Severity": "High",
+            capacity_alerts.append({
+                "Floor": fu["floor_id"],
+                "Status": "Saturated",
+                "Used / Total": f"{fu['used_seats']} / {fu['total_seats']}",
+                "Utilization": f"{fu['utilization_pct']:.0%}",
             })
 
     # Unit shortfall alerts
@@ -123,44 +126,72 @@ def render(sidebar_state):
         if a.effective_demand_seats > 0:
             gap_pct = a.seat_gap / a.effective_demand_seats
             if gap_pct < UNIT_SHORTFALL_THRESHOLD:
-                alerts.append({
-                    "Type": "Unit Shortfall",
-                    "Detail": f"{a.unit_name}: {a.seat_gap:+d} seats ({gap_pct:.0%} of demand)",
-                    "Severity": "High",
+                capacity_alerts.append({
+                    "Floor": a.unit_name,
+                    "Status": "Shortfall",
+                    "Used / Total": f"{a.allocated_seats} / {a.effective_demand_seats}",
+                    "Utilization": f"{gap_pct:+.0%}",
                 })
+
+    # RTO compliance alerts (units below global RTO target)
+    units = get_units()
+    attendance_profiles = get_attendance()
+    att_map = {a.unit_name: a for a in attendance_profiles}
+
+    # RTO utilization data (use scenario-modified attendance for RTO mandate)
+    _, scenario_att_map = apply_overrides(units, att_map, scenario)
+    rto_alerts_data = compute_rto_alerts(allocations, units, scenario_att_map, get_rule_config())
+    rto_chart_data = [ra for ra in rto_alerts_data if ra["status"] != "Aligned"]
+    rto_all_data = rto_alerts_data  # all units for chart
+    for ra in rto_chart_data:
+        rto_alerts_list.append({
+            "Unit": ra["unit_name"],
+            "Alert": ra["status"],
+            "Allocated": ra["allocated_seats"],
+            "RTO Need": ra["expected_seats"],
+        })
 
     # Fragmentation alerts
     for a in allocations:
         if a.fragmentation_score > 0.7:
-            alerts.append({
-                "Type": "High Fragmentation",
-                "Detail": f"{a.unit_name}: fragmentation score {a.fragmentation_score:.2f}",
-                "Severity": "Medium",
+            other_alerts.append({
+                "Unit": a.unit_name,
+                "Alert": "High Fragmentation",
+                "Detail": f"Score: {a.fragmentation_score:.2f}",
             })
 
-    # RTO utilization alerts
-    units = get_units()
-    attendance_profiles = get_attendance()
-    att_map = {a.unit_name: a for a in attendance_profiles}
-    rto_alerts = compute_rto_alerts(allocations, units, att_map, get_rule_config())
-    for ra in rto_alerts:
-        if ra["status"] == "Under-allocated":
-            alerts.append({
-                "Type": "RTO Under-allocated",
-                "Detail": f"{ra['unit_name']}: allocated {ra['allocated_seats']} seats "
-                          f"but RTO-based need is {ra['expected_seats']} ({ra['gap_pct']:+.0%})",
-                "Severity": "High",
-            })
-        elif ra["status"] == "Under-utilized":
-            alerts.append({
-                "Type": "RTO Under-utilized",
-                "Detail": f"{ra['unit_name']}: allocated {ra['allocated_seats']} seats "
-                          f"but RTO-based need is only {ra['expected_seats']} ({ra['gap_pct']:+.0%})",
-                "Severity": "Medium",
+    # Cross-building spread alerts
+    from collections import defaultdict
+    unit_bldg_map = defaultdict(lambda: defaultdict(int))
+    for a in assignments:
+        unit_bldg_map[a.unit_name][a.building_id] += 1
+    for unit_name, bldgs in unit_bldg_map.items():
+        if len(bldgs) > 1:
+            detail_parts = [f"{bid} ({cnt} floor{'s' if cnt > 1 else ''})"
+                            for bid, cnt in sorted(bldgs.items())]
+            other_alerts.append({
+                "Unit": unit_name,
+                "Alert": "Cross-Building Spread",
+                "Detail": f"Across {', '.join(detail_parts)}",
             })
 
-    if alerts:
-        alert_df = pd.DataFrame(alerts)
-        st.dataframe(alert_df, use_container_width=True)
-    else:
+    has_any = capacity_alerts or rto_all_data or other_alerts
+
+    if not has_any:
         st.success("No planning alerts — all metrics within acceptable ranges.")
+    else:
+        if capacity_alerts:
+            st.error(f"{len(capacity_alerts)} Capacity Alert{'s' if len(capacity_alerts) != 1 else ''}")
+            st.dataframe(pd.DataFrame(capacity_alerts), use_container_width=True, hide_index=True)
+
+        if rto_all_data:
+            st.subheader("RTO-Based Need vs Allocated")
+            fig = rto_need_vs_allocated_bar(rto_all_data)
+            st.plotly_chart(fig, use_container_width=True)
+            if rto_alerts_list:
+                st.warning(f"{len(rto_alerts_list)} unit{'s' if len(rto_alerts_list) != 1 else ''} with allocation mismatch")
+                st.dataframe(pd.DataFrame(rto_alerts_list), use_container_width=True, hide_index=True)
+
+        if other_alerts:
+            st.info(f"{len(other_alerts)} Other Alert{'s' if len(other_alerts) != 1 else ''}")
+            st.dataframe(pd.DataFrame(other_alerts), use_container_width=True, hide_index=True)

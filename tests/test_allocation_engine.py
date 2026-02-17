@@ -20,8 +20,8 @@ def make_unit(name="Engineering", hc=400, growth=0.15, attrition=0.08, priority=
     return Unit(name, hc, growth, attrition, priority)
 
 
-def make_attendance(name="Engineering", median=250, max_hc=320, rto=3.5, stability=0.8):
-    return AttendanceProfile(name, median, max_hc, rto, stability)
+def make_attendance(name="Engineering", median=250, max_hc=320, rto=3.5):
+    return AttendanceProfile(name, median, max_hc, rto)
 
 
 def make_floor(building="B1", tower="B1-T1", floor_num=1, seats=100):
@@ -70,22 +70,11 @@ class TestComputeRecommendedAllocation:
     def test_clamped_to_policy_bounds(self):
         # Very low demand should clamp to min
         unit = make_unit(hc=100, growth=0.0, attrition=0.0)
-        att = make_attendance(name="Engineering", median=5, max_hc=6, rto=1.0, stability=0.9)
+        att = make_attendance(name="Engineering", median=5, max_hc=6, rto=1.0)
         config = {"min_alloc_pct": 0.20, "max_alloc_pct": 1.50}
 
         result = compute_recommended_allocation(unit, att, horizon_months=6, rule_config=config)
         assert result.recommended_alloc_pct >= 0.20
-
-    def test_stability_affects_buffer(self):
-        att_stable = make_attendance(stability=0.9)
-        att_volatile = make_attendance(stability=0.3)
-        unit = make_unit()
-
-        result_stable = compute_recommended_allocation(unit, att_stable, horizon_months=6)
-        result_volatile = compute_recommended_allocation(unit, att_volatile, horizon_months=6)
-
-        # Stable attendance should result in equal or lower allocation
-        assert result_stable.recommended_alloc_pct <= result_volatile.recommended_alloc_pct
 
 
 class TestDistributeSeats:

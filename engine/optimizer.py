@@ -7,6 +7,8 @@ import pulp
 from models.building import Floor
 from models.unit import Unit
 from models.allocation import AllocationRecommendation, FloorAssignment
+from models.attendance import AttendanceProfile
+from config.defaults import PEAK_BUFFER_MULTIPLIER, WORKING_DAYS_PER_WEEK
 
 
 @dataclass
@@ -18,55 +20,72 @@ class OptimizationResult:
     before_after: List[dict]  # comparison data
     consolidation_suggestions: List[str]
     message: str = ""
+    savings_summary: Optional[dict] = None  # for RTO objectives
 
 
 def _build_adjacency_weights(
     floors: List[Floor],
     baseline_assignments: List[FloorAssignment],
 ) -> Dict[Tuple[str, str], float]:
-    """Build adjacency bonus weights for unit-floor pairs."""
+    """Build adjacency bonus weights for unit-floor pairs.
+
+    Hierarchy: same_floor (100) > adjacent_floor (60) > same_tower (30) >
+    same_building (15) > cross_building (0).
+    """
     weights = {}
-    # Map existing unit -> set of (tower_id, floor_number)
     unit_floors = {}
     for a in baseline_assignments:
         if a.unit_name not in unit_floors:
             unit_floors[a.unit_name] = set()
-        unit_floors[a.unit_name].add((a.tower_id, a.floor_number))
+        unit_floors[a.unit_name].add((a.building_id, a.tower_id, a.floor_number))
 
     for f in floors:
         for unit_name, existing in unit_floors.items():
             bonus = 0
-            if (f.tower_id, f.floor_number) in existing:
+            if (f.building_id, f.tower_id, f.floor_number) in existing:
                 bonus = 100
             elif any(t == f.tower_id and abs(fn - f.floor_number) == 1
-                     for t, fn in existing):
+                     for _, t, fn in existing):
                 bonus = 60
-            elif any(t == f.tower_id for t, _ in existing):
+            elif any(t == f.tower_id for _, t, _ in existing):
                 bonus = 30
+            elif any(b == f.building_id for b, _, _ in existing):
+                bonus = 15
             weights[(unit_name, f.floor_id)] = bonus
 
     return weights
+
+
+def _compute_rto_demand(att: AttendanceProfile, buffer_mult: float, override_rto: float = None) -> int:
+    """Compute attendance-based seat need for a unit."""
+    rto = override_rto if override_rto is not None else att.avg_rto_days_per_week
+    base = att.monthly_median_hc
+    peak = (att.monthly_max_hc - att.monthly_median_hc) * buffer_mult
+    return max(1, round((base + peak) * (rto / WORKING_DAYS_PER_WEEK)))
 
 
 def optimize_allocation(
     allocations: List[AllocationRecommendation],
     floors: List[Floor],
     baseline_assignments: List[FloorAssignment],
-    objective: str = "min_shortfall",
+    objective: str = "optimal_placement",
     excluded_floor_ids: List[str] = None,
-    min_alloc_pct: float = 0.20,
-    max_alloc_pct: float = 1.50,
     units: Optional[List[Unit]] = None,
+    attendance_map: Optional[Dict[str, AttendanceProfile]] = None,
+    rule_config: Optional[dict] = None,
+    target_rto_days: Optional[float] = None,
 ) -> OptimizationResult:
     """
     Run LP optimization for seat allocation.
 
     Objectives:
-    - min_shortfall: Minimize total seat shortfall
-    - max_cohesion: Maximize floor cohesion (adjacency bonuses)
-    - min_floors: Minimize number of floors used
-    - fair_allocation: Minimize worst-case shortfall ratio
+    - optimal_placement: Place units per allocation rule on fewest floors with max cohesion
+    - rto_based: Allocate by actual attendance patterns, free unused capacity
+    - rto_whatif: Simulate a different RTO policy (target_rto_days)
     """
+    cfg = rule_config or {}
+    buffer_mult = cfg.get("peak_buffer_multiplier", PEAK_BUFFER_MULTIPLIER)
+
     excluded = set(excluded_floor_ids or [])
     available_floors = [f for f in floors if f.floor_id not in excluded]
 
@@ -75,6 +94,17 @@ def optimize_allocation(
     floor_map = {f.floor_id: f for f in available_floors}
     alloc_map = {a.unit_name: a for a in allocations}
     unit_map = {u.unit_name: u for u in (units or [])}
+    att_map = attendance_map or {}
+
+    # Determine demand per unit based on objective
+    demand = {}
+    for u in unit_names:
+        if objective == "rto_based" and u in att_map:
+            demand[u] = _compute_rto_demand(att_map[u], buffer_mult)
+        elif objective == "rto_whatif" and u in att_map and target_rto_days is not None:
+            demand[u] = _compute_rto_demand(att_map[u], buffer_mult, override_rto=target_rto_days)
+        else:
+            demand[u] = alloc_map[u].effective_demand_seats
 
     prob = pulp.LpProblem("SeatAllocation", pulp.LpMinimize)
 
@@ -87,84 +117,53 @@ def optimize_allocation(
                 upBound=floor_map[fid].total_seats, cat="Integer",
             )
 
-    # Binary variables for floor usage (needed for min_floors)
+    # Binary variables for floor usage (used by all objectives for min-floors)
     y = {}
-    if objective == "min_floors":
-        for u in unit_names:
-            for fid in floor_ids:
-                y[(u, fid)] = pulp.LpVariable(f"y_{u}_{fid}", cat="Binary")
+    for u in unit_names:
+        for fid in floor_ids:
+            y[(u, fid)] = pulp.LpVariable(f"y_{u}_{fid}", cat="Binary")
+            # Link: if x > 0 then y = 1
+            prob += x[(u, fid)] <= floor_map[fid].total_seats * y[(u, fid)], f"link_{u}_{fid}"
 
-    # --- Objective ---
-    if objective == "min_shortfall":
-        # Slack variables for shortfall
-        s = {}
-        for u in unit_names:
-            s[u] = pulp.LpVariable(f"s_{u}", lowBound=0)
-            prob += s[u] >= alloc_map[u].effective_demand_seats - pulp.lpSum(
-                x[(u, fid)] for fid in floor_ids
-            ), f"shortfall_{u}"
-        prob += pulp.lpSum(s[u] for u in unit_names), "total_shortfall"
+    # Adjacency weights (cohesion tiebreaker)
+    weights = _build_adjacency_weights(available_floors, baseline_assignments)
+    cohesion_term = pulp.lpSum(
+        x[(u, fid)] * weights.get((u, fid), 0)
+        for u in unit_names for fid in floor_ids
+    )
+    COHESION_WEIGHT = 0.001
+    FLOOR_WEIGHT = 1.0
 
-    elif objective == "max_cohesion":
-        weights = _build_adjacency_weights(available_floors, baseline_assignments)
-        prob += -pulp.lpSum(
-            x[(u, fid)] * weights.get((u, fid), 0)
-            for u in unit_names for fid in floor_ids
-        ), "neg_cohesion"
+    # Objective: minimize floors used + cohesion tiebreaker (all objectives share this)
+    # Shortfall slack for when demand exceeds capacity
+    s = {}
+    for u in unit_names:
+        s[u] = pulp.LpVariable(f"s_{u}", lowBound=0)
+        prob += s[u] >= demand[u] - pulp.lpSum(
+            x[(u, fid)] for fid in floor_ids
+        ), f"shortfall_{u}"
 
-    elif objective == "min_floors":
-        for u in unit_names:
-            for fid in floor_ids:
-                prob += x[(u, fid)] <= floor_map[fid].total_seats * y[(u, fid)], f"link_{u}_{fid}"
-        prob += pulp.lpSum(y[(u, fid)] for u in unit_names for fid in floor_ids), "total_floors"
-
-    elif objective == "fair_allocation":
-        z = pulp.LpVariable("z_fairness", lowBound=0)
-        for u in unit_names:
-            demand = alloc_map[u].effective_demand_seats
-            if demand > 0:
-                prob += z >= (demand - pulp.lpSum(
-                    x[(u, fid)] for fid in floor_ids
-                )) / demand, f"fairness_{u}"
-        prob += z, "max_shortfall_ratio"
+    SHORTFALL_WEIGHT = 100.0  # High priority: meet demand first
+    prob += (
+        SHORTFALL_WEIGHT * pulp.lpSum(s[u] for u in unit_names)
+        + FLOOR_WEIGHT * pulp.lpSum(y[(u, fid)] for u in unit_names for fid in floor_ids)
+        - COHESION_WEIGHT * cohesion_term
+    ), "combined_objective"
 
     # --- Constraints ---
     # C1: Floor capacity
     for fid in floor_ids:
         prob += pulp.lpSum(x[(u, fid)] for u in unit_names) <= floor_map[fid].total_seats, f"cap_{fid}"
 
-    # C2: Min allocation (soft — relax if infeasible)
+    # C2: Cap at demand (each unit gets at most what they need)
     for u in unit_names:
-        unit = unit_map.get(u)
-        if unit:
-            min_seats = max(0, round(min_alloc_pct * unit.current_total_hc))
-            prob += pulp.lpSum(x[(u, fid)] for fid in floor_ids) >= min_seats, f"min_{u}"
-
-    # C3: Max allocation
-    for u in unit_names:
-        unit = unit_map.get(u)
-        if unit:
-            max_seats = round(max_alloc_pct * unit.current_total_hc)
-            prob += pulp.lpSum(x[(u, fid)] for fid in floor_ids) <= max_seats, f"max_{u}"
+        prob += pulp.lpSum(x[(u, fid)] for fid in floor_ids) <= demand[u], f"max_{u}"
 
     # --- Solve ---
     prob.solve(pulp.PULP_CBC_CMD(msg=0, timeLimit=30))
-
     status = pulp.LpStatus[prob.status]
 
     if status != "Optimal":
-        # Try relaxing min allocation constraints
-        for u in unit_names:
-            constraint_name = f"min_{u}"
-            if constraint_name in prob.constraints:
-                del prob.constraints[constraint_name]
-
-        prob.solve(pulp.PULP_CBC_CMD(msg=0, timeLimit=30))
-        status = pulp.LpStatus[prob.status]
-        if status == "Optimal":
-            status = "Optimal (relaxed min allocation)"
-
-    if status not in ("Optimal", "Optimal (relaxed min allocation)"):
         return OptimizationResult(
             status=status,
             objective_value=0,
@@ -201,17 +200,15 @@ def optimize_allocation(
 
     old_floor_count = {}
     for a in baseline_assignments:
-        key = a.unit_name
-        if key not in old_floor_count:
-            old_floor_count[key] = set()
-        old_floor_count[key].add((a.tower_id, a.floor_number))
+        if a.unit_name not in old_floor_count:
+            old_floor_count[a.unit_name] = set()
+        old_floor_count[a.unit_name].add((a.tower_id, a.floor_number))
 
     new_floor_count = {}
     for a in new_assignments:
-        key = a.unit_name
-        if key not in new_floor_count:
-            new_floor_count[key] = set()
-        new_floor_count[key].add((a.tower_id, a.floor_number))
+        if a.unit_name not in new_floor_count:
+            new_floor_count[a.unit_name] = set()
+        new_floor_count[a.unit_name].add((a.tower_id, a.floor_number))
 
     before_after = []
     for u in unit_names:
@@ -221,6 +218,7 @@ def optimize_allocation(
         after_floors = len(new_floor_count.get(u, set()))
         before_after.append({
             "Unit": u,
+            "Demand": demand[u],
             "Before Seats": before_seats,
             "After Seats": after_seats,
             "Seat Change": after_seats - before_seats,
@@ -239,6 +237,36 @@ def optimize_allocation(
                 f"{u}: Consolidated from {old_f} floors to {new_f} floors"
             )
 
+    # Savings summary (for RTO objectives)
+    savings = None
+    if objective in ("rto_based", "rto_whatif"):
+        alloc_total = sum(alloc_map[u].effective_demand_seats for u in unit_names)
+        rto_total = sum(demand[u] for u in unit_names)
+        optimized_total = sum(unit_totals.values())
+
+        all_old_floors = set()
+        for a in baseline_assignments:
+            all_old_floors.add((a.tower_id, a.floor_number))
+        all_new_floors = set()
+        for a in new_assignments:
+            all_new_floors.add((a.tower_id, a.floor_number))
+
+        savings = {
+            "allocation_rule_seats": alloc_total,
+            "rto_based_seats": rto_total,
+            "optimized_seats": optimized_total,
+            "seats_saved": alloc_total - optimized_total,
+            "floors_before": len(all_old_floors),
+            "floors_after": len(all_new_floors),
+            "floors_freed": len(all_old_floors) - len(all_new_floors),
+        }
+
+    obj_label = {
+        "optimal_placement": "Optimal Placement",
+        "rto_based": "RTO-Based",
+        "rto_whatif": f"What-If RTO ({target_rto_days} days)" if target_rto_days else "What-If RTO",
+    }.get(objective, objective)
+
     return OptimizationResult(
         status=status,
         objective_value=pulp.value(prob.objective) or 0,
@@ -246,5 +274,6 @@ def optimize_allocation(
         unit_allocations=unit_totals,
         before_after=before_after,
         consolidation_suggestions=suggestions,
-        message=f"Optimization complete. Objective ({objective}): {pulp.value(prob.objective):.2f}",
+        message=f"Optimization complete ({obj_label}). Total seats: {sum(unit_totals.values()):,}.",
+        savings_summary=savings,
     )

@@ -9,13 +9,11 @@ def explain_allocation(
     monthly_median_hc: float,
     monthly_max_hc: float,
     avg_rto_days: float,
-    attendance_stability: float,
     hc_growth_pct: float,
     attrition_pct: float,
     horizon_months: int,
     base_ratio: float,
     peak_buffer: float,
-    adj_peak_buffer: float,
     rto_factor: float,
     scaled_ratio: float,
     horizon_factor: float,
@@ -32,11 +30,8 @@ def explain_allocation(
         f"out of {current_hc} HC => base ratio {base_ratio:.1%}"
     )
 
-    stability_label = "stable" if (attendance_stability or 0) > 0.7 else "variable"
     steps.append(
-        f"Step 2 - Peak buffer: Peak HC ({monthly_max_hc:.0f}) adds {peak_buffer:.1%} buffer. "
-        f"Attendance is {stability_label} (stability={attendance_stability or 'N/A'}) "
-        f"=> adjusted buffer {adj_peak_buffer:.1%}"
+        f"Step 2 - Peak buffer: Peak HC ({monthly_max_hc:.0f}) adds {peak_buffer:.1%} buffer"
     )
 
     steps.append(
@@ -51,7 +46,7 @@ def explain_allocation(
     )
 
     steps.append(
-        f"Step 5 - Final: {growth_adjusted:.1%} (growth-adjusted) + {adj_peak_buffer:.1%} (buffer) "
+        f"Step 5 - Final: {growth_adjusted:.1%} (growth-adjusted) + {peak_buffer:.1%} (buffer) "
         f"= {recommended_alloc_pct:.1%} recommended allocation"
     )
 

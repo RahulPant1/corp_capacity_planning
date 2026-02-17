@@ -93,11 +93,18 @@ class TestAdjacencyTier:
         assert tier == "adjacent"
         assert bonus == 60
 
-    def test_cross_tower(self):
+    def test_same_building(self):
         f = make_floor(tower="B1-T2", floor_num=1)
         existing = [FloorAssignment("Eng", "B1", "B1-T1", 3, 50, "same_floor")]
         tier, bonus = compute_adjacency_tier(f, existing, "Eng")
-        assert tier == "cross_tower"
+        assert tier == "same_building"
+        assert bonus == 15
+
+    def test_cross_building(self):
+        f = Floor("B2", "Tech Park", "B2-T1", 1, 100)
+        existing = [FloorAssignment("Eng", "B1", "B1-T1", 3, 50, "same_floor")]
+        tier, bonus = compute_adjacency_tier(f, existing, "Eng")
+        assert tier == "cross_building"
         assert bonus == 0
 
 

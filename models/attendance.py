@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -8,7 +7,6 @@ class AttendanceProfile:
     monthly_median_hc: float
     monthly_max_hc: float
     avg_rto_days_per_week: float   # e.g. 3.2
-    attendance_stability: Optional[float] = None  # 0-1 scale, 1=very stable
 
     @property
     def peak_to_median_ratio(self) -> float:

@@ -10,7 +10,7 @@ from data.session_store import (
     get_active_scenario_id, get_last_data_edit,
 )
 from models.scenario import ScenarioOverride, ScenarioParams
-from engine.scenario_engine import run_scenario, compare_scenarios
+from engine.scenario_engine import run_scenario, compare_scenarios, apply_overrides
 from engine.allocation_engine import compute_rto_alerts
 from components.tables import render_comparison_table
 from components.charts import scenario_comparison_bar
@@ -224,14 +224,50 @@ def render(sidebar_state):
         st.divider()
         st.subheader("Current Scenario Results")
 
+        allocs = scenario.allocation_results
+
+        # Compute RTO data for table enrichment
+        att_profiles = get_attendance()
+        att_map_rto = {a.unit_name: a for a in att_profiles}
+        _, scenario_att_map = apply_overrides(units, att_map_rto, scenario)
+        rto_alerts_data = compute_rto_alerts(allocs, units, scenario_att_map, get_rule_config())
+        rto_alert_map = {ra["unit_name"]: ra for ra in rto_alerts_data}
+
+        # RTO compliance lookup
+        has_rto_mandate = (
+            scenario.params.global_rto_mandate_days
+            and scenario.params.global_rto_mandate_days > 0
+        )
+        rto_compliance_map = {}
+        if has_rto_mandate:
+            from engine.allocation_engine import compute_rto_compliance
+            compliance = compute_rto_compliance(att_map_rto, scenario.params.global_rto_mandate_days)
+            rto_compliance_map = {rc["unit_name"]: rc for rc in compliance}
+
+        # Build enriched table
         result_rows = []
-        for a in scenario.allocation_results:
+        for a in allocs:
+            ra = rto_alert_map.get(a.unit_name)
+            rc = rto_compliance_map.get(a.unit_name)
+
+            rto_need = ra["expected_seats"] if ra else "—"
+
+            if has_rto_mandate and rc:
+                if rc["compliant"]:
+                    rto_status = f"{rc['actual_rto']:.1f} / {rc['target_rto']:.1f} ✓"
+                else:
+                    rto_status = f"{rc['actual_rto']:.1f} / {rc['target_rto']:.1f} ✗"
+            else:
+                rto_status = "N/A"
+
             result_rows.append({
                 "Unit": a.unit_name,
                 "Alloc %": f"{a.recommended_alloc_pct:.1%}",
                 "Demand": a.effective_demand_seats,
                 "Allocated": a.allocated_seats,
                 "Gap": a.seat_gap,
+                "RTO Need": rto_need,
+                "RTO Status": rto_status,
                 "Fragmentation": f"{a.fragmentation_score:.2f}",
                 "Overridden": "Yes" if a.is_overridden else "",
             })
@@ -242,7 +278,6 @@ def render(sidebar_state):
         st.divider()
         st.subheader("Scenario Impact Summary")
 
-        allocs = scenario.allocation_results
         total_demand = sum(a.effective_demand_seats for a in allocs)
         total_allocated = sum(a.allocated_seats for a in allocs)
         total_gap = total_allocated - total_demand
@@ -252,6 +287,18 @@ def render(sidebar_state):
             f"This scenario allocates **{total_allocated:,} seats** across "
             f"**{num_units} units**. Total demand is **{total_demand:,} seats**, "
             f"leaving a net gap of **{total_gap:+,} seats**."
+        )
+
+        # RTO Need explanation
+        total_rto_need = sum(
+            rto_alert_map[a.unit_name]["expected_seats"]
+            for a in allocs if a.unit_name in rto_alert_map
+        )
+        st.markdown(
+            f"**RTO Need** reflects how many seats each unit actually requires based on "
+            f"real attendance patterns: *(Median HC + Peak Buffer) x (RTO Days / 5)*. "
+            f"Total RTO-based need across all units is **{total_rto_need:,} seats** "
+            f"vs **{total_allocated:,} allocated**."
         )
 
         # Per-unit highlights
@@ -289,27 +336,6 @@ def render(sidebar_state):
                     reason_parts.append(f"high fragmentation {frag:.2f}")
                 reason = ", ".join(reason_parts)
                 st.markdown(f"- :{'red' if level == 'RED' else 'orange'}[{level}] **{name}** — {reason}")
-
-        # RTO utilization alerts
-        att_profiles = get_attendance()
-        att_map_rto = {a.unit_name: a for a in att_profiles}
-        rto_alerts = compute_rto_alerts(allocs, units, att_map_rto, get_rule_config())
-        rto_issues = [ra for ra in rto_alerts if ra["status"] != "Aligned"]
-        if rto_issues:
-            st.markdown("**RTO Utilization Alerts:**")
-            for ra in rto_issues:
-                if ra["status"] == "Under-allocated":
-                    st.markdown(
-                        f"- :red[UNDER-ALLOCATED] **{ra['unit_name']}**: "
-                        f"allocated {ra['allocated_seats']} seats but RTO-based need is "
-                        f"{ra['expected_seats']} ({ra['gap_pct']:+.0%})"
-                    )
-                else:
-                    st.markdown(
-                        f"- :orange[UNDER-UTILIZED] **{ra['unit_name']}**: "
-                        f"allocated {ra['allocated_seats']} seats but RTO-based need is only "
-                        f"{ra['expected_seats']} ({ra['gap_pct']:+.0%})"
-                    )
 
         # --- Auto Baseline Comparison ---
         if scenario.scenario_id != "baseline":

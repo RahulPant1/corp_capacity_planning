@@ -11,8 +11,6 @@ MIN_ALLOC_PCT = 0.20  # Minimum allocation percentage per unit
 MAX_ALLOC_PCT = 1.50  # Maximum allocation percentage per unit
 
 # Buffer and scaling
-STABILITY_DISCOUNT_THRESHOLD = 0.7  # Stability above this reduces peak buffer
-STABILITY_DISCOUNT_FACTOR = 0.30    # How much to reduce peak buffer for stable units
 PEAK_BUFFER_MULTIPLIER = 1.0        # Multiplier applied to peak buffer
 
 # Planning horizons (months)
@@ -33,7 +31,8 @@ SCENARIO_TYPES = [
 ADJACENCY_BONUS_SAME_FLOOR = 100
 ADJACENCY_BONUS_ADJACENT_FLOOR = 60
 ADJACENCY_BONUS_SAME_TOWER = 30
-ADJACENCY_BONUS_CROSS_TOWER = 0
+ADJACENCY_BONUS_SAME_BUILDING = 15
+ADJACENCY_BONUS_CROSS_BUILDING = 0
 FRAGMENTATION_PENALTY_PER_FLOOR = 30
 
 # Risk thresholds
@@ -60,3 +59,20 @@ WORKING_DAYS_PER_WEEK = 5
 
 # RTO utilization alert threshold
 RTO_UTILIZATION_THRESHOLD = 0.20
+
+# Planning buffer presets (replaces individual buffer/scaling sliders for Advanced mode)
+PLANNING_BUFFER_PRESETS = {
+    "lean": {
+        "peak_buffer_multiplier": 0.7,
+        "shrink_contribution_factor": 0.7,
+    },
+    "balanced": {
+        "peak_buffer_multiplier": 1.0,
+        "shrink_contribution_factor": 0.5,
+    },
+    "conservative": {
+        "peak_buffer_multiplier": 1.4,
+        "shrink_contribution_factor": 0.3,
+    },
+}
+DEFAULT_PLANNING_BUFFER = "balanced"

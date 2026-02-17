@@ -111,6 +111,24 @@ def render(sidebar_state):
 
     st.divider()
 
+    # --- Cross-Building Spread ---
+    st.subheader("Building Spread")
+    from collections import defaultdict
+    unit_bldg_spread = defaultdict(lambda: defaultdict(int))
+    for a in assignments:
+        unit_bldg_spread[a.unit_name][a.building_id] += 1
+
+    cross_bldg_units = {u: b for u, b in unit_bldg_spread.items() if len(b) > 1}
+    if cross_bldg_units:
+        for unit_name, bldgs in sorted(cross_bldg_units.items()):
+            detail = ", ".join(f"{bid} ({cnt} floor{'s' if cnt > 1 else ''})"
+                               for bid, cnt in sorted(bldgs.items()))
+            st.warning(f"**{unit_name}**: spread across {len(bldgs)} buildings — {detail}")
+    else:
+        st.success("All units are contained within a single building.")
+
+    st.divider()
+
     # --- Consolidation Suggestions ---
     st.subheader("Consolidation Suggestions")
     frag_scores = {a.unit_name: a.fragmentation_score for a in allocations}

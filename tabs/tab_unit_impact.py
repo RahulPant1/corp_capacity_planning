@@ -3,8 +3,9 @@
 import streamlit as st
 import pandas as pd
 
-from data.session_store import get_active_scenario, get_units, is_data_loaded
+from data.session_store import get_active_scenario, get_units, get_attendance, get_rule_config, is_data_loaded
 from components.tables import render_risk_table
+from engine.allocation_engine import compute_rto_alerts
 from config.defaults import (
     RISK_RED_GAP_PCT, RISK_RED_FRAGMENTATION,
     RISK_AMBER_GAP_PCT, RISK_AMBER_FRAGMENTATION,
@@ -35,6 +36,12 @@ def render(sidebar_state):
     allocations = scenario.allocation_results
     units = get_units()
     unit_map = {u.unit_name: u for u in units}
+
+    # Compute RTO alerts
+    attendance_profiles = get_attendance()
+    att_map = {a.unit_name: a for a in attendance_profiles}
+    rto_alerts = compute_rto_alerts(allocations, units, att_map, get_rule_config())
+    rto_status_map = {ra["unit_name"]: ra for ra in rto_alerts}
 
     # --- Filters ---
     col_f1, col_f2, col_f3 = st.columns(3)
@@ -69,6 +76,9 @@ def render(sidebar_state):
 
         projected_hc = round(u.projected_hc(scenario.planning_horizon_months))
 
+        rto_info = rto_status_map.get(a.unit_name)
+        rto_status = rto_info["status"] if rto_info else "N/A"
+
         rows.append({
             "Unit": a.unit_name,
             "Priority": priority,
@@ -84,6 +94,7 @@ def render(sidebar_state):
             "Gap %": f"{gap_pct:.1%}",
             "Fragmentation": f"{a.fragmentation_score:.2f}",
             "Risk Level": risk,
+            "RTO Status": rto_status,
         })
 
     if not rows:

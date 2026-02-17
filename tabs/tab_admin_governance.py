@@ -14,7 +14,7 @@ from data.session_store import (
     set_floors, set_units, set_attendance, set_data_loaded,
     get_scenarios, get_active_scenario_id, add_scenario, remove_scenario,
     update_scenario, create_baseline_scenario, get_audit_log, get_rule_config,
-    set_rule_config, add_audit_entry, is_data_loaded,
+    set_rule_config, add_audit_entry, is_data_loaded, set_last_data_edit,
 )
 from models.scenario import Scenario, ScenarioParams
 from config.defaults import SCENARIO_TYPES
@@ -241,6 +241,7 @@ def render(sidebar_state):
                             changed = True
                     if changed:
                         set_floors(current_floors)
+                        set_last_data_edit()
                         st.success("Floor capacities updated.")
                         st.rerun()
                     else:
@@ -304,6 +305,7 @@ def render(sidebar_state):
                             changed = True
                     if changed:
                         set_units(current_units)
+                        set_last_data_edit()
                         st.success("Unit data updated.")
                         st.rerun()
                     else:
@@ -393,6 +395,18 @@ def render(sidebar_state):
                     step=0.1, key="cfg_shrink_factor",
                 )
 
+    # RTO Utilization Alert Threshold
+    rto_util_threshold_int = st.slider(
+        "RTO Utilization Alert Threshold %",
+        min_value=5, max_value=50,
+        value=round(config.get("rto_utilization_threshold", 0.20) * 100),
+        step=5,
+        key="cfg_rto_util_threshold",
+        help="Alert when allocated seats exceed RTO-based expected need by this percentage. "
+             "Units with allocation above this threshold are flagged as under-utilized.",
+    )
+    rto_util_threshold = rto_util_threshold_int / 100.0
+
     if st.button("Save Rule Configuration"):
         new_config = {
             "allocation_mode": alloc_mode_value,
@@ -403,6 +417,7 @@ def render(sidebar_state):
             "stability_discount_factor": stability_discount,
             "peak_buffer_multiplier": buffer_mult,
             "shrink_contribution_factor": shrink_factor,
+            "rto_utilization_threshold": rto_util_threshold,
         }
         set_rule_config(new_config)
         add_audit_entry("config_change", "global", "rule_config", str(config), str(new_config))

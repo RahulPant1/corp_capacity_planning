@@ -8,6 +8,7 @@ from data.session_store import (
     update_scenario, add_audit_entry, is_data_loaded,
 )
 from engine.optimizer import optimize_allocation
+from engine.scenario_engine import apply_floor_modifications
 from components.tables import render_comparison_table
 
 
@@ -44,14 +45,25 @@ def render(sidebar_state):
         key="opt_objective",
     )
 
+    # --- Compute effective floors (apply scenario exclusions + capacity reduction) ---
+    config = get_rule_config()
+    raw_floors = get_floors()
+    effective_floors = apply_floor_modifications(raw_floors, scenario)
+    units = get_units()
+
+    raw_total = sum(f.total_seats for f in raw_floors)
+    effective_total = sum(f.total_seats for f in effective_floors)
+
     # --- Constraint Visibility ---
     with st.expander("Active Constraints", expanded=False):
-        config = get_rule_config()
-        floors = get_floors()
-        units = get_units()
-
-        st.markdown(f"- **Floor capacity**: {len(floors)} floors, "
-                    f"{sum(f.total_seats for f in floors):,} total seats")
+        if len(effective_floors) < len(raw_floors) or effective_total < raw_total:
+            st.markdown(
+                f"- **Floor capacity**: {len(raw_floors)} floors ({raw_total:,} seats) "
+                f"-> **{len(effective_floors)} floors ({effective_total:,} seats)** after scenario adjustments"
+            )
+        else:
+            st.markdown(f"- **Floor capacity**: {len(effective_floors)} floors, "
+                        f"{effective_total:,} total seats")
         st.markdown(f"- **Min allocation %**: {config.get('min_alloc_pct', 0.20):.0%}")
         st.markdown(f"- **Max allocation %**: {config.get('max_alloc_pct', 1.50):.0%}")
         st.markdown(f"- **Units**: {len(units)}")
@@ -65,16 +77,16 @@ def render(sidebar_state):
     # --- Run Optimization ---
     col1, col2 = st.columns([1, 3])
     with col1:
-        run_opt = st.button("🚀 Run Optimization", type="primary", key="btn_run_opt")
+        run_opt = st.button("Run Optimization", type="primary", key="btn_run_opt")
 
     if run_opt:
         with st.spinner("Running optimization..."):
             result = optimize_allocation(
                 allocations=scenario.allocation_results,
-                floors=floors,
+                floors=effective_floors,
                 baseline_assignments=scenario.floor_assignments,
                 objective=selected_obj,
-                excluded_floor_ids=scenario.params.excluded_floors,
+                excluded_floor_ids=[],  # already excluded via apply_floor_modifications
                 min_alloc_pct=config.get("min_alloc_pct", 0.20),
                 max_alloc_pct=config.get("max_alloc_pct", 1.50),
                 units=units,
@@ -125,7 +137,7 @@ def render(sidebar_state):
         # Accept button
         st.divider()
         if not scenario.is_locked:
-            if st.button("✅ Accept & Apply to Scenario", type="primary", key="btn_accept_opt"):
+            if st.button("Accept & Apply to Scenario", type="primary", key="btn_accept_opt"):
                 # Apply optimized assignments to scenario
                 scenario.floor_assignments = result.assignments
 

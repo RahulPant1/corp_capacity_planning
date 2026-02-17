@@ -132,15 +132,15 @@ Finance,55,65,4.0,0.90
 
 - **Active Scenario** — switch between baseline and custom scenarios
 - **Planning Horizon** — 3 or 6 months
-- **Mode** — View, Simulate, or Optimize
 
 ### Tab 1: Executive Dashboard
 
 Read-only summary for leadership review. Shows:
-- Total seats vs total demand
+- **Effective supply** — reflects scenario adjustments (excluded floors, capacity reduction). Shows both base and effective seat counts when a scenario modifies supply.
 - Seat gap and number of impacted units
 - Capacity vs demand chart by tower
-- Planning alerts (saturated floors, unit shortfalls, high fragmentation)
+- Planning alerts (saturated floors, unit shortfalls, high fragmentation, RTO utilization)
+- Stale-data warning when base data has changed since the last simulation
 
 ### Tab 2: Unit Impact View
 
@@ -150,6 +150,7 @@ Detailed per-unit analysis. Filter by priority, risk level, or unit name. Each u
 - Effective demand vs allocated seats
 - Gap and fragmentation score
 - Risk level (RED / AMBER / GREEN)
+- **RTO Status** (Aligned / Under-allocated / Under-utilized)
 
 Select a unit to see the step-by-step allocation explanation and floor assignments.
 
@@ -166,27 +167,33 @@ Physical seat utilization across towers and floors:
 Create and test "what-if" scenarios:
 
 1. Adjust **scenario-wide controls**: global RTO mandate, capacity reduction, excluded floors
-2. Edit **unit-level overrides**: growth %, attrition %, RTO days, allocation % (baseline columns are read-only)
-3. Click **"Run Simulation"** to compute results
-4. Click **"Compare with Baseline"** to see side-by-side differences
+2. Edit **unit-level overrides**: growth %, attrition %, RTO days (advanced mode), allocation % — pre-filled with baseline values, edit only what you need
+3. Click **"Run Simulation"** to compute results (or **"Reset Scenario"** to clear all overrides)
 
-Scenario changes are isolated — they never modify the baseline.
+After simulation, the Scenario Lab shows:
+- **Results table** — per-unit allocation, demand, gap, fragmentation
+- **Scenario Impact Summary** — English narrative with overall stats, per-unit highlights, key risks, and RTO utilization alerts
+- **Changes vs Baseline** — automatic comparison showing which units gained/lost seats, net change, and a side-by-side table with chart
+
+A stale-data warning appears when base data has changed since the last simulation. Scenario changes are isolated — they never modify the baseline.
 
 ### Tab 5: Optimization & Recommendations
 
-LP-based seat optimization using PuLP. Choose an objective:
+LP-based seat optimization using PuLP. The optimizer respects scenario adjustments — excluded floors and capacity reductions are applied before optimization.
+
+Choose an objective:
 - **Minimize Seat Shortfall** — reduce total unmet demand
 - **Maximize Floor Cohesion** — keep units on same/adjacent floors
 - **Minimize Floors Used** — consolidate onto fewer floors
 - **Fair Allocation** — minimize worst-case shortfall ratio
 
-After running, review the before/after comparison. Click **"Accept & Apply"** to apply results to the active scenario.
+Review active constraints (effective floor count and supply after scenario adjustments), then run. After running, review the before/after comparison. Click **"Accept & Apply"** to apply results to the active scenario.
 
 ### Tab 6: Admin & Governance
 
 - **Data Upload** — upload a single Excel file (3 tabs) or three separate files, or load sample data
 - **Edit Base Data** — modify floor capacities, unit headcounts, and per-unit seat allocation %
-- **Rule Configuration** — choose allocation mode (Simple/Advanced), set global allocation %, adjust policy bounds
+- **Rule Configuration** — choose allocation mode (Simple/Advanced), set global allocation %, adjust policy bounds, set RTO utilization alert threshold
 - **Scenario Management** — create, lock, unlock, or delete scenarios
 - **Audit Trail** — view and export a log of all changes, overrides, and actions
 
@@ -211,7 +218,7 @@ Best for quick POCs and business discussions. Each unit is allocated a flat perc
 - **Global Seat Allocation %** (default 80%) — the company-wide default. Set in Rule Configuration.
 - **Per-unit Seat Alloc %** — override the global default for specific units (e.g., Engineering at 90%). Set in Edit Base Data > Unit Headcount > "Seat Alloc %" column. Leave blank to use the global default.
 
-Attendance data (median, peak, RTO, stability) is still uploaded and shown in dashboards, but is **not used** for allocation calculation in Simple mode.
+Attendance data (median, peak, RTO, stability) is still uploaded and shown in dashboards, but is **not used** for allocation calculation in Simple mode. However, RTO data **is used** for utilization alerts (see [RTO Utilization Alerts](#rto-utilization-alerts) below).
 
 ### Advanced Mode
 
@@ -258,34 +265,31 @@ These parameters are only visible and used when Allocation Mode is set to "Advan
 | **Peak Buffer Multiplier** | 1.0 | Scales the peak buffer up or down for all units. Increase above 1.0 to be more conservative (more buffer for peak days). Decrease below 1.0 to be leaner. |
 | **Shrink Contribution Factor** | 0.50 | When there's scarcity, shrinking units (negative net HC change) release this fraction of their shrinkage back to the shared pool. A value of 0.50 means half of the projected reduction is made available to growing units. |
 
-### Scenario Lab Controls
+### RTO Utilization Alerts
 
-| Control | Description |
-|---------|-------------|
-| **Global RTO Mandate** | Sets a minimum RTO days/week across all units in the scenario. If a unit already has higher RTO, it keeps its value. Useful for simulating "return to office 4 days/week" mandates. |
-| **Capacity Reduction %** | Reduces total seat capacity on every floor by this percentage. Simulates floor closures, renovations, or shared-space reductions. |
-| **Excluded Floors** | Removes specific floors entirely from the scenario. Simulates floor shutdowns or floors reserved for other purposes. |
-| **Unit-Level Overrides** | Per-unit adjustments to growth %, attrition %, RTO days, and allocation %. Only scenario columns are editable — baseline values remain untouched. |
+The application monitors whether seat allocations are aligned with actual RTO/attendance behavior and flags mismatches. This works in **both** Simple and Advanced modes.
 
-### Optimization Objectives
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| **RTO Utilization Alert Threshold** | 20% | Alert when allocated seats exceed RTO-based expected need by this percentage. Units above this threshold are flagged as "Under-utilized". Configurable in Rule Configuration. |
 
-| Objective | When to Use |
-|-----------|-------------|
-| **Minimize Seat Shortfall** | Default choice. Reduces total unmet demand across all units. Best when the goal is to get everyone as close to their required seats as possible. |
-| **Maximize Floor Cohesion** | Use when teams need to sit together. Prioritizes placing units on the same or adjacent floors rather than spreading them across the building. |
-| **Minimize Floors Used** | Use for consolidation exercises. Packs units onto fewer floors to free up entire floors for release or repurposing. |
-| **Fair Allocation** | Use when equity matters more than total efficiency. Minimizes the worst-case shortfall ratio so no single unit bears a disproportionate gap. |
+**How expected seats are calculated:**
 
----
+- **Simple mode**: `expected_seats = (avg_rto_days / 5) x current_hc`. Uses RTO days as a proxy for in-office presence.
+- **Advanced mode**: `expected_seats = monthly_median_hc + stability-adjusted peak buffer`. Uses actual attendance data (median/max in-office strength, stability score) and the same buffer/stability parameters from the advanced allocation formula.
 
-## How Allocation Works
+**Alert types:**
 
-The allocation formula depends on the selected mode (see [Allocation Modes](#allocation-modes) above).
+| Status | Condition | Meaning |
+|--------|-----------|---------|
+| **Under-allocated** | Allocated seats < expected need by >10% | Unit needs more seats to meet their RTO/attendance commitment |
+| **Under-utilized** | Allocated seats > expected need by >threshold | Unit is not using its allocated space effectively |
+| **Aligned** | Within bounds | Allocation matches RTO-based expected need |
 
-**In both modes**, when total demand exceeds supply (scarcity):
-- Units are prioritized by business priority, then by net growth
-- Shrinking units release a portion of their allocation back to the pool
-- Remaining seats are distributed proportionally
+Alerts appear in:
+- **Executive Dashboard** — in the Planning Alerts table
+- **Scenario Lab** — in the Scenario Impact Summary section
+- **Unit Impact View** — as an "RTO Status" column on each unit
 
 ---
 
@@ -304,7 +308,7 @@ The app includes 5 pre-built scenario templates available under **Admin & Govern
 2. Switch to this scenario in the sidebar
 3. Go to **Scenario Lab** > click **Run Simulation**
 4. Check the **Executive Dashboard** — seat gap will likely increase
-5. Compare with Baseline to see which units are most impacted
+5. Scroll down in Scenario Lab to see the auto-generated baseline comparison
 
 ### 2. Aggressive Growth
 
@@ -317,7 +321,7 @@ The app includes 5 pre-built scenario templates available under **Admin & Govern
 2. Run Simulation in Scenario Lab
 3. Check **Unit Impact View** — look for RED risk units with large shortfalls
 4. Try **Optimization** with "Minimize Shortfall" to see the best possible allocation
-5. Compare with Baseline to quantify the seat gap increase
+5. Check the auto baseline comparison in Scenario Lab results
 
 ### 3. High Attrition / Downsizing
 
@@ -355,7 +359,7 @@ The app includes 5 pre-built scenario templates available under **Admin & Govern
 2. Run Simulation
 3. Check **Spatial / Floor View** — you'll see many surplus floors
 4. Try **Optimization** with "Minimize Floors Used" to consolidate onto fewer floors
-5. Compare with Baseline to see total seat savings
+5. Check baseline comparison in Scenario Lab results to see total seat savings
 
 ### Building Your Own Scenario
 
@@ -365,9 +369,8 @@ The app includes 5 pre-built scenario templates available under **Admin & Govern
    - Adjust **scenario-wide controls** (RTO mandate, capacity reduction, excluded floors)
    - Edit individual units in the override table (change growth %, attrition %, RTO days, or set an allocation % override)
 4. Click **Run Simulation**
-5. Browse results across Dashboard, Unit Impact, and Spatial tabs
-6. Use **Compare with Baseline** to see a side-by-side diff
-7. Optionally run **Optimization** and accept results
+5. Browse results across Dashboard, Unit Impact, and Spatial tabs — baseline comparison appears automatically in the Scenario Lab results
+6. Optionally run **Optimization** and accept results
 
 ### Editing Base Data
 
@@ -376,7 +379,7 @@ You can also modify the underlying baseline data directly in **Admin & Governanc
 - **Unit Headcount** — update HC, growth %, attrition %, priority, or **Seat Alloc %** for any unit
   - **Seat Alloc %** is a per-unit allocation override used in Simple mode. Leave blank to use the global default. Example: set Engineering to 90% if they need more in-office seats than the company default.
 
-Changes are logged in the audit trail and take effect immediately for all future simulations.
+Changes are logged in the audit trail. After editing base data, a warning banner appears in the Scenario Lab and Executive Dashboard reminding you to re-run the simulation. Changes take effect when you next run a simulation.
 
 ---
 

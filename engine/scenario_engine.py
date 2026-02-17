@@ -1,6 +1,7 @@
 """Scenario simulation engine — clone baseline, apply overrides, recompute."""
 
 import copy
+from datetime import datetime
 from typing import Dict, List, Optional
 from models.unit import Unit
 from models.attendance import AttendanceProfile
@@ -112,6 +113,7 @@ def run_scenario(
     # Store results
     scenario.allocation_results = allocations
     scenario.floor_assignments = assignments
+    scenario.last_run_at = datetime.now()
 
     return scenario
 

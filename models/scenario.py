@@ -34,3 +34,4 @@ class Scenario:
     params: ScenarioParams = field(default_factory=ScenarioParams)
     allocation_results: List = field(default_factory=list)
     floor_assignments: List = field(default_factory=list)
+    last_run_at: Optional[datetime] = None

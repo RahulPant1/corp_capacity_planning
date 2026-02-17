@@ -1,17 +1,15 @@
-"""Global sidebar controls for scenario, horizon, and mode selection."""
+"""Global sidebar controls for scenario and horizon selection."""
 
 import streamlit as st
 from dataclasses import dataclass
-from typing import List
 from data.session_store import get_scenarios, get_active_scenario_id, set_active_scenario_id
-from config.defaults import PLANNING_HORIZONS, DEFAULT_PLANNING_HORIZON, MODES, DEFAULT_MODE
+from config.defaults import PLANNING_HORIZONS, DEFAULT_PLANNING_HORIZON
 
 
 @dataclass
 class SidebarState:
     scenario_id: str
     planning_horizon: int
-    mode: str
 
 
 def render_sidebar() -> SidebarState:
@@ -49,14 +47,6 @@ def render_sidebar() -> SidebarState:
             key="sidebar_horizon",
         )
 
-        # Mode selector
-        mode = st.radio(
-            "Mode",
-            options=MODES,
-            index=MODES.index(DEFAULT_MODE),
-            key="sidebar_mode",
-        )
-
         st.divider()
 
         # Data status indicator
@@ -77,5 +67,4 @@ def render_sidebar() -> SidebarState:
     return SidebarState(
         scenario_id=selected_id,
         planning_horizon=horizon,
-        mode=mode,
     )

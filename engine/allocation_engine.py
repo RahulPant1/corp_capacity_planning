@@ -266,3 +266,71 @@ def run_allocation(
     total_supply = sum(f.total_seats for f in floors)
     allocations = distribute_seats(allocations, units, total_supply, rule_config)
     return allocations
+
+
+def compute_rto_alerts(
+    allocations: List[AllocationRecommendation],
+    units: List[Unit],
+    attendance_map: Dict[str, AttendanceProfile],
+    rule_config: Optional[dict] = None,
+) -> List[dict]:
+    """Compute RTO utilization alerts for all units.
+
+    Simple mode: expected_seats = (avg_rto_days / 5) * current_hc
+    Advanced mode: expected_seats = monthly_median_hc + stability-adjusted peak buffer
+
+    Returns list of dicts with: unit_name, expected_seats, allocated_seats, gap_pct, status
+    """
+    cfg = rule_config or {}
+    mode = cfg.get("allocation_mode", ALLOCATION_MODE)
+    threshold = cfg.get("rto_utilization_threshold", 0.20)
+    stability_thresh = cfg.get("stability_discount_threshold", STABILITY_DISCOUNT_THRESHOLD)
+    stability_discount = cfg.get("stability_discount_factor", STABILITY_DISCOUNT_FACTOR)
+    buffer_mult = cfg.get("peak_buffer_multiplier", PEAK_BUFFER_MULTIPLIER)
+
+    unit_map = {u.unit_name: u for u in units}
+    alloc_map = {a.unit_name: a for a in allocations}
+
+    alerts = []
+    for unit_name, alloc in alloc_map.items():
+        unit = unit_map.get(unit_name)
+        att = attendance_map.get(unit_name)
+        if not unit or unit.current_total_hc == 0:
+            continue
+
+        if mode == "simple":
+            rto_days = att.avg_rto_days_per_week if att else 3.0
+            expected_seats = round((rto_days / WORKING_DAYS_PER_WEEK) * unit.current_total_hc)
+        else:
+            # Advanced mode: use median + stability-adjusted peak buffer
+            if not att:
+                continue
+            base_expected = att.monthly_median_hc
+            peak_buffer = (att.monthly_max_hc - att.monthly_median_hc) * buffer_mult
+            stability = att.attendance_stability or 0.5
+            if stability > stability_thresh:
+                peak_buffer *= (1 - stability_discount)
+            expected_seats = round(base_expected + peak_buffer)
+
+        if expected_seats == 0:
+            continue
+
+        allocated = alloc.allocated_seats
+        gap_pct = (allocated - expected_seats) / expected_seats
+
+        if gap_pct < -0.10:
+            status = "Under-allocated"
+        elif gap_pct > threshold:
+            status = "Under-utilized"
+        else:
+            status = "Aligned"
+
+        alerts.append({
+            "unit_name": unit_name,
+            "expected_seats": expected_seats,
+            "allocated_seats": allocated,
+            "gap_pct": gap_pct,
+            "status": status,
+        })
+
+    return alerts

@@ -21,6 +21,7 @@ def initialize_session_state():
         "active_scenario_id": "baseline",
         "audit_log": [],
         "data_loaded": False,
+        "last_data_edit_at": None,
         "rule_config": {
             "allocation_mode": "simple",
             "global_alloc_pct": 0.80,
@@ -30,11 +31,11 @@ def initialize_session_state():
             "stability_discount_factor": 0.30,
             "peak_buffer_multiplier": 1.0,
             "shrink_contribution_factor": 0.5,
+            "rto_utilization_threshold": 0.20,
         },
         "sidebar_state": {
             "scenario_id": "baseline",
             "planning_horizon": 6,
-            "mode": "View",
         },
     }
     for key, default in defaults.items():
@@ -79,6 +80,14 @@ def get_rule_config() -> dict:
 
 def is_data_loaded() -> bool:
     return st.session_state.get("data_loaded", False)
+
+
+def get_last_data_edit():
+    return st.session_state.get("last_data_edit_at")
+
+
+def set_last_data_edit():
+    st.session_state["last_data_edit_at"] = datetime.now()
 
 
 # --- Setters ---

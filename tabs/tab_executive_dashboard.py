@@ -4,11 +4,14 @@ import streamlit as st
 import pandas as pd
 
 from data.session_store import (
-    get_active_scenario, get_floors, is_data_loaded,
+    get_active_scenario, get_floors, get_units, get_attendance,
+    get_rule_config, is_data_loaded, get_last_data_edit,
 )
 from components.metrics_cards import render_metric_row
 from components.charts import capacity_vs_demand_bar, utilization_donut
 from engine.spatial import get_floor_utilization
+from engine.allocation_engine import compute_rto_alerts
+from engine.scenario_engine import apply_floor_modifications
 from config.defaults import FLOOR_SATURATION_THRESHOLD, UNIT_SHORTFALL_THRESHOLD
 
 
@@ -25,19 +28,38 @@ def render(sidebar_state):
         st.info("No allocation results available. Run a simulation from the Scenario Lab.")
         return
 
+    # Stale-data warning
+    last_edit = get_last_data_edit()
+    if last_edit and (scenario.last_run_at is None or last_edit > scenario.last_run_at):
+        st.warning(
+            "Base data has changed since the last simulation. "
+            "Go to Scenario Lab and re-run to see updated results."
+        )
+
     allocations = scenario.allocation_results
     assignments = scenario.floor_assignments
     floors = get_floors()
 
+    # Compute effective supply (accounting for scenario exclusions + capacity reduction)
+    effective_floors = apply_floor_modifications(floors, scenario)
+    raw_total_seats = sum(f.total_seats for f in floors)
+    effective_total_seats = sum(f.total_seats for f in effective_floors)
+    has_scenario_adjustments = effective_total_seats < raw_total_seats
+
     # --- KPI Metrics ---
-    total_seats = sum(f.total_seats for f in floors)
     total_demand = sum(a.effective_demand_seats for a in allocations)
     total_allocated = sum(a.allocated_seats for a in allocations)
     seat_gap = total_allocated - total_demand
     impacted_units = sum(1 for a in allocations if a.seat_gap < 0)
 
+    supply_label = "Effective Supply" if has_scenario_adjustments else "Total Seats (Supply)"
+    supply_metrics = {"label": supply_label, "value": f"{effective_total_seats:,}"}
+    if has_scenario_adjustments:
+        supply_metrics["delta"] = f"of {raw_total_seats:,} base seats"
+        supply_metrics["delta_color"] = "off"
+
     render_metric_row([
-        {"label": "Total Seats (Supply)", "value": f"{total_seats:,}"},
+        supply_metrics,
         {"label": "Total Demand", "value": f"{total_demand:,}"},
         {"label": "Seat Gap", "value": f"{seat_gap:+,}",
          "delta": f"{seat_gap:+,}", "delta_color": "normal" if seat_gap >= 0 else "inverse"},
@@ -45,6 +67,16 @@ def render(sidebar_state):
          "delta": f"{impacted_units} units" if impacted_units > 0 else "None",
          "delta_color": "inverse" if impacted_units > 0 else "normal"},
     ])
+
+    # Scenario adjustment info
+    if has_scenario_adjustments:
+        notes = []
+        if scenario.params.excluded_floors:
+            notes.append(f"{len(scenario.params.excluded_floors)} floors excluded ({', '.join(scenario.params.excluded_floors)})")
+        if scenario.params.capacity_reduction_pct > 0:
+            notes.append(f"{scenario.params.capacity_reduction_pct:.0%} capacity reduction applied")
+        st.info(f"Scenario adjustments: {'; '.join(notes)}. "
+                f"Effective supply is {effective_total_seats:,} seats (base: {raw_total_seats:,}).")
 
     st.divider()
 
@@ -66,7 +98,7 @@ def render(sidebar_state):
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        fig = utilization_donut(total_allocated, total_seats)
+        fig = utilization_donut(total_allocated, effective_total_seats)
         st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
@@ -103,6 +135,27 @@ def render(sidebar_state):
             alerts.append({
                 "Type": "High Fragmentation",
                 "Detail": f"{a.unit_name}: fragmentation score {a.fragmentation_score:.2f}",
+                "Severity": "Medium",
+            })
+
+    # RTO utilization alerts
+    units = get_units()
+    attendance_profiles = get_attendance()
+    att_map = {a.unit_name: a for a in attendance_profiles}
+    rto_alerts = compute_rto_alerts(allocations, units, att_map, get_rule_config())
+    for ra in rto_alerts:
+        if ra["status"] == "Under-allocated":
+            alerts.append({
+                "Type": "RTO Under-allocated",
+                "Detail": f"{ra['unit_name']}: allocated {ra['allocated_seats']} seats "
+                          f"but RTO-based need is {ra['expected_seats']} ({ra['gap_pct']:+.0%})",
+                "Severity": "High",
+            })
+        elif ra["status"] == "Under-utilized":
+            alerts.append({
+                "Type": "RTO Under-utilized",
+                "Detail": f"{ra['unit_name']}: allocated {ra['allocated_seats']} seats "
+                          f"but RTO-based need is only {ra['expected_seats']} ({ra['gap_pct']:+.0%})",
                 "Severity": "Medium",
             })
 

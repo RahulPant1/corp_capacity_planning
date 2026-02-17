@@ -55,9 +55,8 @@ SHRINK_CONTRIBUTION_FACTOR = 0.5  # How much of shrinkage is released to pool
 # Priority ordering for scarcity allocation
 PRIORITY_ORDER = {"High": 0, "Medium": 1, "Low": 2, None: 3}
 
-# Mode options
-MODES = ["View", "Simulate", "Optimize"]
-DEFAULT_MODE = "View"
-
 # Working days per week (for RTO ratio calculation)
 WORKING_DAYS_PER_WEEK = 5
+
+# RTO utilization alert threshold
+RTO_UTILIZATION_THRESHOLD = 0.20

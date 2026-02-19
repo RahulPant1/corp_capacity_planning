@@ -174,17 +174,24 @@ After simulation, the Scenario Lab shows:
 
 ### Tab 5: Optimization & Recommendations
 
-LP-based seat optimization using PuLP. Three business-relevant objectives:
+LP-based seat optimization using PuLP. **Run Simulation first** — Optimization places units on floors based on demand computed by Simulation.
 
+**Three objectives:**
 - **Optimal Placement** — seat everyone per allocation rule on fewest floors with maximum cohesion
 - **RTO-Based** — allocate by actual attendance patterns, free unused capacity. Shows seats saved and floors freed.
-- **What-If RTO** — simulate a different RTO policy (slider: 1-5 days/week). See "If everyone came in 4 days, here's what we'd need."
+- **What-If RTO** — simulate a different RTO policy (slider: 1-5 days/week)
 
-The optimizer:
-- Caps each unit at their demand (respects the global allocation rule)
-- Minimizes floors used + maximizes team cohesion (same/adjacent floors)
-- Shows before/after comparison with savings metrics
-- "Accept & Apply" pushes results to all other tabs
+**Advanced Runtime Constraints** (optional, applied at run time):
+- **Max Floors Per Unit** — cap how many floors any unit can spread across (e.g., max 2 floors)
+- **Pin Units to Tower** — restrict specific units to a tower (e.g., Engineering stays in B1-T1)
+- **Minimum Seats Guarantee** — ensure every unit gets at least X% of their demand even under scarcity
+
+**Results include:**
+- Before/after seat and floor count comparison per unit
+- **Cost Estimation Panel** — enter $ per seat/year to see annual cost and savings in dollars
+- **Optimization History** — last 3 runs stored for comparison (objective, seats, floors used)
+- **Sensitivity Analysis** — auto-runs Lean/Balanced/Conservative buffer presets and shows seat demand range
+- "Accept & Apply" pushes results to Dashboard, Spatial View, and Unit Impact
 
 ### Tab 6: Admin & Governance
 

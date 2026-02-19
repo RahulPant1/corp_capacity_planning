@@ -74,6 +74,10 @@ def optimize_allocation(
     attendance_map: Optional[Dict[str, AttendanceProfile]] = None,
     rule_config: Optional[dict] = None,
     target_rto_days: Optional[float] = None,
+    # Runtime constraints
+    max_floors_per_unit: Optional[int] = None,
+    pinned_tower_ids: Optional[Dict[str, List[str]]] = None,
+    min_guarantee_pct: Optional[float] = None,
 ) -> OptimizationResult:
     """
     Run LP optimization for seat allocation.
@@ -82,6 +86,11 @@ def optimize_allocation(
     - optimal_placement: Place units per allocation rule on fewest floors with max cohesion
     - rto_based: Allocate by actual attendance patterns, free unused capacity
     - rto_whatif: Simulate a different RTO policy (target_rto_days)
+
+    Runtime constraints:
+    - max_floors_per_unit: each unit uses at most this many floors
+    - pinned_tower_ids: {unit_name: [tower_id, ...]} — restrict units to specific towers
+    - min_guarantee_pct: each unit receives at least this fraction of its demand
     """
     cfg = rule_config or {}
     buffer_mult = cfg.get("peak_buffer_multiplier", PEAK_BUFFER_MULTIPLIER)
@@ -159,9 +168,42 @@ def optimize_allocation(
     for u in unit_names:
         prob += pulp.lpSum(x[(u, fid)] for fid in floor_ids) <= demand[u], f"max_{u}"
 
+    # C3: Max floors per unit (runtime constraint)
+    if max_floors_per_unit is not None:
+        for u in unit_names:
+            prob += pulp.lpSum(y[(u, fid)] for fid in floor_ids) <= max_floors_per_unit, f"maxfloors_{u}"
+
+    # C4: Pin units to specific towers (zero out disallowed floor vars)
+    if pinned_tower_ids:
+        for u, allowed_towers in pinned_tower_ids.items():
+            if u in unit_names and allowed_towers:
+                for fid in floor_ids:
+                    if floor_map[fid].tower_id not in allowed_towers:
+                        x[(u, fid)].upBound = 0
+
+    # C5: Minimum seats guarantee per unit
+    guaranteed_units = []
+    if min_guarantee_pct is not None and min_guarantee_pct > 0:
+        for u in unit_names:
+            min_seats = round(min_guarantee_pct * demand[u])
+            if min_seats > 0:
+                prob += pulp.lpSum(x[(u, fid)] for fid in floor_ids) >= min_seats, f"minguarantee_{u}"
+                guaranteed_units.append(u)
+
     # --- Solve ---
     prob.solve(pulp.PULP_CBC_CMD(msg=0, timeLimit=30))
     status = pulp.LpStatus[prob.status]
+    relaxed_guarantee = False
+
+    if status != "Optimal" and guaranteed_units:
+        # Relax min guarantee constraints and retry
+        for u in guaranteed_units:
+            cname = f"minguarantee_{u}"
+            if cname in prob.constraints:
+                del prob.constraints[cname]
+        prob.solve(pulp.PULP_CBC_CMD(msg=0, timeLimit=30))
+        status = pulp.LpStatus[prob.status]
+        relaxed_guarantee = True
 
     if status != "Optimal":
         return OptimizationResult(
@@ -267,6 +309,10 @@ def optimize_allocation(
         "rto_whatif": f"What-If RTO ({target_rto_days} days)" if target_rto_days else "What-If RTO",
     }.get(objective, objective)
 
+    msg = f"Optimization complete ({obj_label}). Total seats: {sum(unit_totals.values()):,}."
+    if relaxed_guarantee:
+        msg += " Note: minimum seats guarantee was relaxed due to capacity constraints."
+
     return OptimizationResult(
         status=status,
         objective_value=pulp.value(prob.objective) or 0,
@@ -274,6 +320,6 @@ def optimize_allocation(
         unit_allocations=unit_totals,
         before_after=before_after,
         consolidation_suggestions=suggestions,
-        message=f"Optimization complete ({obj_label}). Total seats: {sum(unit_totals.values()):,}.",
+        message=msg,
         savings_summary=savings,
     )

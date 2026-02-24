@@ -32,7 +32,6 @@ def parse_units(df: pd.DataFrame) -> List[Unit]:
             unit_name=str(row["Unit Name"]).strip(),
             current_total_hc=int(row["Current Total Headcount"]),
             hc_growth_pct=float(row["HC Growth Forecast (%)"]) / 100.0,
-            attrition_pct=float(row["Attrition Forecast (%)"]) / 100.0,
             business_priority=priority,
         ))
     return units

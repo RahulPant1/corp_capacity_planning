@@ -20,8 +20,14 @@ def render_sidebar() -> SidebarState:
 
         # Scenario selector
         scenarios = get_scenarios()
-        scenario_names = {sid: s.name for sid, s in scenarios.items()} if scenarios else {"baseline": "Baseline"}
-        scenario_ids = list(scenario_names.keys())
+        # Show lock icon for locked scenarios
+        def _scenario_label(sid):
+            s = scenarios.get(sid)
+            if s is None:
+                return sid
+            return f"{s.name} 🔒" if s.is_locked else s.name
+
+        scenario_ids = list(scenarios.keys()) if scenarios else ["baseline"]
 
         current_id = get_active_scenario_id()
         if current_id not in scenario_ids and scenario_ids:
@@ -31,7 +37,7 @@ def render_sidebar() -> SidebarState:
         selected_id = st.selectbox(
             "Active Scenario",
             options=scenario_ids,
-            format_func=lambda x: scenario_names.get(x, x),
+            format_func=_scenario_label,
             index=selected_idx,
             key="sidebar_scenario",
         )
@@ -60,7 +66,8 @@ def render_sidebar() -> SidebarState:
         active = scenarios.get(selected_id)
         if active:
             st.caption(f"Type: {active.scenario_type}")
-            st.caption(f"Locked: {'Yes' if active.is_locked else 'No'}")
+            if active.is_locked:
+                st.caption("🔒 Locked — edits disabled")
             if active.unit_overrides:
                 st.caption(f"Overrides: {len(active.unit_overrides)} units")
 

@@ -16,8 +16,8 @@ from engine.allocation_engine import (
 )
 
 
-def make_unit(name="Engineering", hc=400, growth=0.15, attrition=0.08, priority="High"):
-    return Unit(name, hc, growth, attrition, priority)
+def make_unit(name="Engineering", hc=400, growth=0.15, priority="High"):
+    return Unit(name, hc, growth, priority)
 
 
 def make_attendance(name="Engineering", median=250, max_hc=320, rto=3.5):
@@ -57,19 +57,19 @@ class TestComputeRecommendedAllocation:
 
         assert result_high.recommended_alloc_pct >= result_low.recommended_alloc_pct
 
-    def test_high_attrition_decreases_allocation(self):
-        unit_low_att = make_unit(attrition=0.02)
-        unit_high_att = make_unit(attrition=0.25)
+    def test_negative_growth_decreases_allocation(self):
+        unit_positive = make_unit(growth=0.10)
+        unit_negative = make_unit(growth=-0.10)
         att = make_attendance()
 
-        result_low = compute_recommended_allocation(unit_low_att, att, horizon_months=6)
-        result_high = compute_recommended_allocation(unit_high_att, att, horizon_months=6)
+        result_positive = compute_recommended_allocation(unit_positive, att, horizon_months=6)
+        result_negative = compute_recommended_allocation(unit_negative, att, horizon_months=6)
 
-        assert result_high.recommended_alloc_pct <= result_low.recommended_alloc_pct
+        assert result_negative.recommended_alloc_pct <= result_positive.recommended_alloc_pct
 
     def test_clamped_to_policy_bounds(self):
         # Very low demand should clamp to min
-        unit = make_unit(hc=100, growth=0.0, attrition=0.0)
+        unit = make_unit(hc=100, growth=0.0)
         att = make_attendance(name="Engineering", median=5, max_hc=6, rto=1.0)
         config = {"min_alloc_pct": 0.20, "max_alloc_pct": 1.50}
 
@@ -90,8 +90,8 @@ class TestDistributeSeats:
         assert result[0].seat_gap == 0
 
     def test_scarcity_distributes_proportionally(self):
-        u1 = make_unit(name="A", hc=100, growth=0.1, attrition=0.0, priority="High")
-        u2 = make_unit(name="B", hc=100, growth=0.0, attrition=0.1, priority="Low")
+        u1 = make_unit(name="A", hc=100, growth=0.1, priority="High")
+        u2 = make_unit(name="B", hc=100, growth=-0.1, priority="Low")
         att1 = make_attendance(name="A", median=80, max_hc=90)
         att2 = make_attendance(name="B", median=80, max_hc=90)
 
@@ -107,8 +107,8 @@ class TestDistributeSeats:
 class TestRunAllocation:
     def test_full_pipeline(self):
         units = [
-            make_unit(name="Eng", hc=200, growth=0.10, attrition=0.05),
-            make_unit(name="Sales", hc=100, growth=0.02, attrition=0.08),
+            make_unit(name="Eng", hc=200, growth=0.10),
+            make_unit(name="Sales", hc=100, growth=0.02),
         ]
         att_map = {
             "Eng": make_attendance(name="Eng", median=140, max_hc=170, rto=3.5),
@@ -125,7 +125,7 @@ class TestRunAllocation:
 
 class TestSimpleAllocation:
     def test_basic_flat_allocation(self):
-        unit = make_unit(hc=400, growth=0.0, attrition=0.0)
+        unit = make_unit(hc=400, growth=0.0)
         config = {"global_alloc_pct": 0.80, "min_alloc_pct": 0.20, "max_alloc_pct": 1.50}
         result = compute_simple_allocation(unit, horizon_months=6, rule_config=config)
 
@@ -133,7 +133,7 @@ class TestSimpleAllocation:
         assert result.effective_demand_seats == 320  # 80% of 400
 
     def test_per_unit_override(self):
-        unit = make_unit(hc=400, growth=0.0, attrition=0.0)
+        unit = make_unit(hc=400, growth=0.0)
         unit.seat_alloc_pct = 0.90  # Override to 90%
         config = {"global_alloc_pct": 0.80, "min_alloc_pct": 0.20, "max_alloc_pct": 1.50}
         result = compute_simple_allocation(unit, horizon_months=6, rule_config=config)
@@ -142,16 +142,24 @@ class TestSimpleAllocation:
         assert result.effective_demand_seats == 360  # 90% of 400
 
     def test_growth_adjustment(self):
-        unit = make_unit(hc=400, growth=0.15, attrition=0.08)
+        unit = make_unit(hc=400, growth=0.07)  # 7% net growth
         config = {"global_alloc_pct": 0.80, "min_alloc_pct": 0.20, "max_alloc_pct": 1.50}
         result = compute_simple_allocation(unit, horizon_months=6, rule_config=config)
 
-        # net change = 7%, over 6mo = 3.5%, so alloc = 0.80 * 1.035 = 0.828
+        # 7% growth over 6mo = 3.5%, so alloc = 0.80 * 1.035 = 0.828
         assert result.recommended_alloc_pct > 0.80
         assert result.recommended_alloc_pct < 0.85
 
+    def test_negative_growth_reduces_allocation(self):
+        unit = make_unit(hc=400, growth=-0.15)  # 15% shrinkage
+        config = {"global_alloc_pct": 0.50, "min_alloc_pct": 0.20, "max_alloc_pct": 1.50}
+        result = compute_simple_allocation(unit, horizon_months=6, rule_config=config)
+
+        # Allocation should be clamped to min or be below base
+        assert result.recommended_alloc_pct <= 0.50
+
     def test_clamping_to_min(self):
-        unit = make_unit(hc=400, growth=0.0, attrition=0.30)  # Heavy attrition
+        unit = make_unit(hc=400, growth=-0.50)  # Heavy shrinkage
         config = {"global_alloc_pct": 0.30, "min_alloc_pct": 0.20, "max_alloc_pct": 1.50}
         result = compute_simple_allocation(unit, horizon_months=6, rule_config=config)
 
@@ -167,19 +175,19 @@ class TestSimpleAllocation:
 
     def test_mode_routing_simple(self):
         """compute_all_allocations should use simple mode when configured."""
-        units = [make_unit(hc=200, growth=0.0, attrition=0.0)]
+        units = [make_unit(hc=200, growth=0.0)]
         att_map = {"Engineering": make_attendance()}
         config = {"allocation_mode": "simple", "global_alloc_pct": 0.80,
                   "min_alloc_pct": 0.20, "max_alloc_pct": 1.50}
 
         results = compute_all_allocations(units, att_map, 6, rule_config=config)
         assert len(results) == 1
-        # In simple mode, alloc should be exactly 80% (no growth/attrition)
+        # In simple mode, alloc should be exactly 80% (no growth)
         assert abs(results[0].recommended_alloc_pct - 0.80) < 0.01
 
     def test_mode_routing_advanced(self):
         """compute_all_allocations should use advanced mode when configured."""
-        units = [make_unit(hc=400, growth=0.15, attrition=0.08)]
+        units = [make_unit(hc=400, growth=0.15)]
         att_map = {"Engineering": make_attendance()}
         config = {"allocation_mode": "advanced", "min_alloc_pct": 0.20, "max_alloc_pct": 1.50}
 

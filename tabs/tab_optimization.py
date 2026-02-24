@@ -97,8 +97,6 @@ def render(sidebar_state):
         st.markdown(f"- **Demand cap**: each unit gets at most their simulation demand (respects allocation rule)")
         if scenario.params.excluded_floors:
             st.markdown(f"- **Excluded floors**: {', '.join(scenario.params.excluded_floors)}")
-        if scenario.params.capacity_reduction_pct > 0:
-            st.markdown(f"- **Capacity reduction**: {scenario.params.capacity_reduction_pct:.0%}")
         if selected_obj in ("rto_based", "rto_whatif"):
             st.markdown(f"- **Demand basis**: Attendance data (Median HC + Peak Buffer × RTO)")
             if selected_obj == "rto_whatif" and target_rto:

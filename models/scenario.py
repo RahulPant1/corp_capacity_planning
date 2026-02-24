@@ -7,7 +7,6 @@ from typing import Dict, List, Optional
 class ScenarioOverride:
     unit_name: str
     hc_growth_pct: Optional[float] = None
-    attrition_pct: Optional[float] = None
     median_hc: Optional[float] = None
     max_hc: Optional[float] = None
     avg_rto_days: Optional[float] = None

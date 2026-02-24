@@ -79,8 +79,7 @@ Defines demand drivers and planning assumptions. **One row per business unit.**
 |--------|-------------|---------|
 | `Unit Name` | Business unit name | Engineering |
 | `Current Total Headcount` | Current total HC for the unit | 400 |
-| `HC Growth Forecast (%)` | Expected growth % over planning horizon | 15 |
-| `Attrition Forecast (%)` | Expected attrition % over planning horizon | 8 |
+| `HC Growth Forecast (%)` | Expected net growth % over planning horizon (positive = growth, negative = downsizing) | 15 |
 | `Business Priority` | *(Optional)* High, Medium, or Low — used for scarcity prioritization | High |
 
 ### File 3: Attendance & RTO Behavior (Required)
@@ -98,12 +97,12 @@ Enables attendance-based validation. **One row per business unit.** Unit names m
 
 ## How Allocation Works
 
-Each unit is allocated a flat percentage of their headcount as seats (default: 80%), adjusted for growth and attrition projections.
+Each unit is allocated a flat percentage of their headcount as seats (default: 80%), adjusted for growth projections.
 
 | Step | Formula | Example |
 |------|---------|---------|
 | 1. **Base allocation %** | Global default (e.g., 80%) or per-unit override | 80% |
-| 2. **Growth/attrition adjustment** | Base % x (1 + net HC change x months / 12) | 80% x 1.035 = 82.8% |
+| 2. **Growth adjustment** | Base % x (1 + Growth% x months / 12) | 80% x 1.035 = 82.8% |
 | 3. **Policy clamp** | Clamped to [min, max] allocation bounds | 82.8% (within bounds) |
 | 4. **Effective demand** | Clamped % x Current headcount | 82.8% x 400 = 331 seats |
 
@@ -163,14 +162,17 @@ Physical seat utilization across towers and floors:
 
 Create and test "what-if" scenarios:
 
-1. Adjust **scenario-wide controls**: global RTO mandate, capacity reduction, excluded floors
-2. Edit **unit-level overrides**: growth %, attrition %, allocation % override
+1. Adjust **scenario-wide controls**: global RTO mandate, excluded floors
+2. Edit **unit-level overrides**: growth % (positive = expansion, negative = downsizing), allocation % override
 3. Click **"Run Simulation"** to compute results
 
 After simulation, the Scenario Lab shows:
 - **Enriched results table** — per-unit allocation, demand, gap, RTO Need, RTO Status, fragmentation
+  - *Fragmentation (0–1)*: 0 = all on one floor (ideal); above 0.5 = consolidation opportunity
+  - *How is Allocation % calculated?* — expandable formula with step-by-step walkthrough
 - **Scenario Impact Summary** — overall stats, RTO Need explanation, per-unit highlights, key risks
 - **Changes vs Baseline** — automatic comparison with side-by-side table and chart
+- **Download Report** — export an Excel report (allocation, floor assignments, risks, optimization run)
 
 ### Tab 5: Optimization & Recommendations
 
@@ -198,7 +200,7 @@ LP-based seat optimization using PuLP. **Run Simulation first** — Optimization
 - **Data Upload** — single Excel file (3 tabs) or three separate files, or load sample data
 - **Edit Base Data** — modify floor capacities, unit headcounts, attendance & RTO data, and per-unit seat allocation %
 - **Rule Configuration** — set global allocation %, policy bounds, planning buffer level (Lean / Balanced / Conservative), RTO alert threshold
-- **Scenario Management** — create, lock, unlock, or delete scenarios
+- **Scenario Management** — create, lock/unlock, delete, or **Make Active** (switch active scenario from Admin). Locked scenarios show 🔒 in the sidebar selector.
 - **Audit Trail** — view and export a log of all changes, overrides, and actions
 
 ---
@@ -246,7 +248,7 @@ cpg_planning_tool/
 ├── config/defaults.py      # Policy bounds and constants
 ├── models/                 # Data models (Floor, Unit, Scenario, etc.)
 ├── data/                   # File loader, validator, session store, sample data
-├── engine/                 # Allocation, spatial, scenario, optimizer, explainer
+├── engine/                 # Allocation, spatial, scenario, optimizer, explainer, report_generator
 ├── tabs/                   # All 6 UI tabs
 ├── components/             # Sidebar, charts, metric cards, tables
 ├── tests/                  # Unit tests (pytest)

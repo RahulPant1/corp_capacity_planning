@@ -27,8 +27,6 @@ def apply_overrides(
         if override:
             if override.hc_growth_pct is not None:
                 u.hc_growth_pct = override.hc_growth_pct
-            if override.attrition_pct is not None:
-                u.attrition_pct = override.attrition_pct
         modified_units.append(u)
 
     for unit_name, override in scenario.unit_overrides.items():

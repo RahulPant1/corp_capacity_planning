@@ -12,7 +12,7 @@ from data.validator import (
 from data.sample_data import generate_buildings_df, generate_units_df, generate_attendance_df
 from data.session_store import (
     set_floors, set_units, set_attendance, set_data_loaded,
-    get_scenarios, get_active_scenario_id, add_scenario, remove_scenario,
+    get_scenarios, get_active_scenario_id, set_active_scenario_id, add_scenario, remove_scenario,
     update_scenario, create_baseline_scenario, get_audit_log, get_rule_config,
     set_rule_config, add_audit_entry, is_data_loaded, set_last_data_edit,
 )
@@ -255,7 +255,6 @@ def render(sidebar_state):
                     "Unit Name": u.unit_name,
                     "Current Total HC": u.current_total_hc,
                     "Growth %": u.hc_growth_pct * 100,
-                    "Attrition %": u.attrition_pct * 100,
                     "Priority": u.business_priority or "None",
                     "Seat Alloc %": (u.seat_alloc_pct * 100) if u.seat_alloc_pct is not None else None,
                 } for u in current_units]
@@ -280,26 +279,23 @@ def render(sidebar_state):
                         row = edited_units.iloc[i]
                         new_hc = int(row["Current Total HC"])
                         new_growth = float(row["Growth %"]) / 100.0
-                        new_attrition = float(row["Attrition %"]) / 100.0
                         new_priority = row["Priority"] if row["Priority"] != "None" else None
                         raw_alloc = row["Seat Alloc %"]
                         new_seat_alloc = float(raw_alloc) / 100.0 if pd.notna(raw_alloc) else None
 
                         if (new_hc != u.current_total_hc or
                             abs(new_growth - u.hc_growth_pct) > 0.001 or
-                            abs(new_attrition - u.attrition_pct) > 0.001 or
                             new_priority != u.business_priority or
                             new_seat_alloc != u.seat_alloc_pct):
                             add_audit_entry(
                                 "edit_base_data", "baseline", "unit_data",
-                                f"HC={u.current_total_hc},G={u.hc_growth_pct:.1%},A={u.attrition_pct:.1%}",
-                                f"HC={new_hc},G={new_growth:.1%},A={new_attrition:.1%},Alloc={new_seat_alloc}",
+                                f"HC={u.current_total_hc},G={u.hc_growth_pct:.1%}",
+                                f"HC={new_hc},G={new_growth:.1%},Alloc={new_seat_alloc}",
                                 unit_name=u.unit_name,
                                 rationale="Manual unit data edit",
                             )
                             u.current_total_hc = new_hc
                             u.hc_growth_pct = new_growth
-                            u.attrition_pct = new_attrition
                             u.business_priority = new_priority
                             u.seat_alloc_pct = new_seat_alloc
                             changed = True
@@ -324,8 +320,8 @@ def render(sidebar_state):
                 att_edit_df = pd.DataFrame(att_rows)
 
                 st.caption(
-                    "Attendance and RTO behavior data. Used in Advanced mode allocation "
-                    "and RTO utilization alerts in both modes."
+                    "Attendance and RTO behavior data. Used for RTO utilization validation "
+                    "and RTO-based optimization objectives."
                 )
 
                 edited_att = st.data_editor(
@@ -424,6 +420,12 @@ def render(sidebar_state):
              "Lean = minimal buffer, Conservative = maximum buffer. "
              "Attendance data (Median HC, Max HC, RTO) is always used.",
     )
+    st.caption(
+        "Planning Buffer controls how peak attendance is weighted in RTO-based validation "
+        "(Dashboard alerts, Scenario Lab RTO Status, and RTO-Based optimization). "
+        "The **Sensitivity Analysis** in the Optimization tab shows how seat demand varies "
+        "across all three presets without changing this global setting."
+    )
 
     # RTO Utilization Alert Threshold
     rto_util_threshold_int = st.slider(
@@ -474,11 +476,17 @@ def render(sidebar_state):
             })
         st.dataframe(pd.DataFrame(scenario_data), use_container_width=True)
 
-        # Lock/Unlock
-        col1, col2 = st.columns(2)
+        st.caption(
+            "**Tip:** Select a scenario here and click 'Make Active' to view it in the Scenario Lab. "
+            "Locked scenarios (🔒) disable edits — unlock to make changes."
+        )
+
+        # Lock/Unlock + Make Active
+        col1, col2, col3 = st.columns(3)
         with col1:
+            non_baseline = [s for s in scenarios if s != "baseline"]
             lock_id = st.selectbox("Select scenario to lock/unlock",
-                                    [s for s in scenarios if s != "baseline"],
+                                    non_baseline,
                                     key="lock_scenario_select")
             if lock_id and st.button("Toggle Lock"):
                 s = scenarios[lock_id]
@@ -489,6 +497,17 @@ def render(sidebar_state):
                 st.rerun()
 
         with col2:
+            make_active_id = st.selectbox("Select scenario to activate",
+                                           list(scenarios.keys()),
+                                           key="make_active_select")
+            if make_active_id and st.button("Make Active →", key="btn_make_active"):
+                set_active_scenario_id(make_active_id)
+                s_name = scenarios[make_active_id].name
+                lock_note = " (locked 🔒)" if scenarios[make_active_id].is_locked else ""
+                st.success(f"Active scenario set to '{s_name}'{lock_note}. Go to Scenario Lab to view it.")
+                st.rerun()
+
+        with col3:
             del_id = st.selectbox("Select scenario to delete",
                                    [s for s in scenarios if s != "baseline" and not scenarios[s].is_locked],
                                    key="delete_scenario_select")
@@ -519,20 +538,20 @@ def render(sidebar_state):
                 "params": ScenarioParams(),
                 "overrides": "_growth_heavy",
             },
-            "High Attrition / Downsizing": {
+            "Downsizing (-15% Growth)": {
                 "type": "attrition",
-                "desc": "All units experience 15% attrition with 0% growth. "
-                        "Tests how much seat capacity is freed up for reallocation.",
+                "desc": "All units shrink by 15% net growth. "
+                        "Tests how much seat capacity is freed up when headcount contracts.",
                 "horizon": 6,
                 "params": ScenarioParams(),
-                "overrides": "_attrition_heavy",
+                "overrides": "_downsizing",
             },
-            "Floor Consolidation (-20% capacity)": {
+            "Floor Consolidation (Give Up Floors)": {
                 "type": "consolidation",
-                "desc": "Reduces seat capacity by 20% across all floors. "
-                        "Simulates giving up floors or renovations that reduce usable seats.",
+                "desc": "Excludes 4 floors from the available supply. "
+                        "Simulates subleasing or taking floors offline for renovation.",
                 "horizon": 6,
-                "params": ScenarioParams(capacity_reduction_pct=0.20),
+                "params": ScenarioParams(excluded_floors=["B1-T1-F4", "B1-T1-F5", "B2-T1-F4", "B2-T1-F5"]),
                 "overrides": {},
             },
             "Hybrid Efficiency (Low RTO)": {
@@ -565,12 +584,12 @@ def render(sidebar_state):
                 for u in current_units:
                     growth = 0.25 if u.business_priority == "High" else 0.10
                     overrides[u.unit_name] = ScenarioOverride(
-                        unit_name=u.unit_name, hc_growth_pct=growth, attrition_pct=0.03,
+                        unit_name=u.unit_name, hc_growth_pct=growth,
                     )
-            elif tmpl["overrides"] == "_attrition_heavy":
+            elif tmpl["overrides"] == "_downsizing":
                 for u in current_units:
                     overrides[u.unit_name] = ScenarioOverride(
-                        unit_name=u.unit_name, hc_growth_pct=0.0, attrition_pct=0.15,
+                        unit_name=u.unit_name, hc_growth_pct=-0.15,
                     )
             elif tmpl["overrides"] == "_low_rto":
                 for u in current_units:

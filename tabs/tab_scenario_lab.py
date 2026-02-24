@@ -12,6 +12,7 @@ from data.session_store import (
 from models.scenario import ScenarioOverride, ScenarioParams
 from engine.scenario_engine import run_scenario, compare_scenarios, apply_overrides
 from engine.allocation_engine import compute_rto_alerts
+from engine.report_generator import generate_scenario_report
 from components.tables import render_comparison_table
 from components.charts import scenario_comparison_bar
 from config.defaults import (
@@ -55,7 +56,7 @@ def render(sidebar_state):
     # --- Scenario-Wide Controls ---
     st.subheader("Scenario-Wide Controls")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
         rto_mandate = st.slider(
             "Global RTO Mandate (days/week)",
@@ -64,18 +65,9 @@ def render(sidebar_state):
             step=0.5,
             key="scenario_rto_mandate",
             disabled=scenario.is_locked,
+            help="Set a minimum RTO target. Units below this are flagged as non-compliant.",
         )
     with col2:
-        capacity_reduction_int = st.slider(
-            "Capacity Reduction %",
-            min_value=0, max_value=30,
-            value=round(scenario.params.capacity_reduction_pct * 100),
-            step=5,
-            key="scenario_capacity_reduction",
-            disabled=scenario.is_locked,
-        )
-        capacity_reduction = capacity_reduction_int / 100.0
-    with col3:
         floors = get_floors()
         all_floor_ids = sorted(set(f.floor_id for f in floors))
         excluded = st.multiselect(
@@ -84,6 +76,7 @@ def render(sidebar_state):
             default=scenario.params.excluded_floors,
             key="scenario_excluded_floors",
             disabled=scenario.is_locked,
+            help="Remove specific floors from the available supply (e.g., renovation, sublease).",
         )
 
     st.divider()
@@ -98,11 +91,10 @@ def render(sidebar_state):
     attendance_profiles = get_attendance()
     att_map = {a.unit_name: a for a in attendance_profiles}
 
-    if alloc_mode == "simple":
-        st.caption(
-            "Simple allocation mode — overrides affect growth, attrition, and allocation %. "
-            "RTO days are not used for allocation in this mode."
-        )
+    st.caption(
+        "Adjust Growth % per unit (positive = expansion, negative = downsizing). "
+        "Use **Alloc % Override** to pin a specific allocation % for a unit."
+    )
 
     # Build editable dataframe — scenario values only (pre-filled from baseline)
     rows = []
@@ -112,8 +104,7 @@ def render(sidebar_state):
 
         row = {
             "Unit": u.unit_name,
-            "Growth %": (override.hc_growth_pct or u.hc_growth_pct) * 100,
-            "Attrition %": (override.attrition_pct or u.attrition_pct) * 100,
+            "Growth %": (override.hc_growth_pct if override.hc_growth_pct is not None else u.hc_growth_pct) * 100,
         }
 
         if alloc_mode == "advanced":
@@ -172,9 +163,6 @@ def render(sidebar_state):
             if abs(row["Growth %"] - base_unit.hc_growth_pct * 100) > 0.01:
                 override.hc_growth_pct = row["Growth %"] / 100.0
                 has_change = True
-            if abs(row["Attrition %"] - base_unit.attrition_pct * 100) > 0.01:
-                override.attrition_pct = row["Attrition %"] / 100.0
-                has_change = True
             if alloc_mode == "advanced" and "RTO Days" in row:
                 att = att_map.get(unit_name)
                 base_rto = att.avg_rto_days_per_week if att else 3.0
@@ -193,7 +181,6 @@ def render(sidebar_state):
         scenario.params = ScenarioParams(
             global_rto_mandate_days=rto_mandate if rto_mandate > 0 else None,
             excluded_floors=excluded,
-            capacity_reduction_pct=capacity_reduction,
         )
 
         # Run simulation
@@ -272,7 +259,39 @@ def render(sidebar_state):
                 "Overridden": "Yes" if a.is_overridden else "",
             })
 
+        st.caption(
+            "**Fragmentation (0–1):** how spread out a unit is across floors. "
+            "0 = all on one floor (ideal). Values above 0.5 suggest consolidation opportunity. "
+            "**RTO Need:** attendance-based seat need — *(Median HC + Peak Buffer) × (RTO Days / 5)*. "
+            "**RTO Status** (if RTO mandate set): actual / target days/week with ✓/✗."
+        )
         st.dataframe(pd.DataFrame(result_rows), use_container_width=True)
+
+        # Allocation % formula expander
+        with st.expander("How is Allocation % calculated?", expanded=False):
+            config_for_exp = get_rule_config()
+            global_pct = config_for_exp.get("global_alloc_pct", 0.80)
+            min_pct = config_for_exp.get("min_alloc_pct", 0.20)
+            max_pct = config_for_exp.get("max_alloc_pct", 1.50)
+            horizon = scenario.planning_horizon_months
+            st.markdown(
+                f"**Formula (Simple mode):**\n\n"
+                f"```\nAlloc % = Global% × (1 + Growth% × Months/12)\n"
+                f"        = {global_pct:.0%} × (1 + Growth% × {horizon}/12)\n"
+                f"then clamped to [{min_pct:.0%} – {max_pct:.0%}] policy bounds\n"
+                f"Effective Demand = Alloc% × Current HC\n```"
+            )
+            non_overridden = [a for a in allocs if not a.is_overridden and a.explanation_steps]
+            if non_overridden:
+                st.markdown("**Example — " + non_overridden[0].unit_name + ":**")
+                for step in non_overridden[0].explanation_steps:
+                    st.markdown(f"- {step}")
+            overridden = [a for a in allocs if a.is_overridden]
+            if overridden:
+                st.markdown(
+                    f"**{len(overridden)} unit(s) have a manual Alloc % Override** — "
+                    "their allocation % was set directly rather than computed by the formula."
+                )
 
         # --- Scenario Impact Summary (English narrative) ---
         st.divider()
@@ -360,3 +379,29 @@ def render(sidebar_state):
                 render_comparison_table(diff_df)
                 fig = scenario_comparison_bar(diff_df)
                 st.plotly_chart(fig, use_container_width=True)
+
+        # --- Download Report ---
+        st.divider()
+        with st.expander("Download Report", expanded=False):
+            st.caption(
+                "Export an Excel report of this scenario for management review. "
+                "Includes allocation results, floor assignments, risks, and the most recent optimization run (if any)."
+            )
+            from datetime import date
+            opt_history = st.session_state.get("optimization_history", [])
+            report_bytes = generate_scenario_report(
+                scenario=scenario,
+                floors=floors,
+                units=units,
+                attendance_map={a.unit_name: a for a in attendance_profiles},
+                rule_config=get_rule_config(),
+                opt_history=opt_history if opt_history else None,
+            )
+            file_name = f"scenario_{scenario.name.replace(' ', '_')}_{date.today()}.xlsx"
+            st.download_button(
+                label="Download Scenario Report (.xlsx)",
+                data=report_bytes,
+                file_name=file_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="btn_download_report",
+            )

@@ -11,8 +11,8 @@ from models.scenario import Scenario, ScenarioOverride, ScenarioParams
 from engine.scenario_engine import apply_overrides, apply_floor_modifications, run_scenario
 
 
-def make_unit(name="Eng", hc=200, growth=0.10, attrition=0.05):
-    return Unit(name, hc, growth, attrition, "High")
+def make_unit(name="Eng", hc=200, growth=0.10):
+    return Unit(name, hc, growth, "High")
 
 
 def make_attendance(name="Eng", median=140, max_hc=170, rto=3.5):

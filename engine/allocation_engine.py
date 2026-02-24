@@ -49,8 +49,8 @@ def compute_recommended_allocation(
     rto_factor = attendance.avg_rto_days_per_week / WORKING_DAYS_PER_WEEK
     scaled_ratio = base_ratio * rto_factor
 
-    # Step 4: Growth/attrition projection
-    net_change = unit.hc_growth_pct - unit.attrition_pct
+    # Step 4: Growth projection
+    net_change = unit.hc_growth_pct
     horizon_factor = 1 + (net_change * (horizon_months / 12))
     growth_adjusted = scaled_ratio * horizon_factor
 
@@ -69,7 +69,6 @@ def compute_recommended_allocation(
         monthly_max_hc=attendance.monthly_max_hc,
         avg_rto_days=attendance.avg_rto_days_per_week,
         hc_growth_pct=unit.hc_growth_pct,
-        attrition_pct=unit.attrition_pct,
         horizon_months=horizon_months,
         base_ratio=base_ratio,
         peak_buffer=peak_buffer,
@@ -98,7 +97,7 @@ def compute_simple_allocation(
     horizon_months: int,
     rule_config: Optional[dict] = None,
 ) -> AllocationRecommendation:
-    """Simple mode: flat allocation % (global or per-unit) with growth/attrition projection."""
+    """Simple mode: flat allocation % (global or per-unit) with growth projection."""
     cfg = rule_config or {}
     global_alloc = cfg.get("global_alloc_pct", DEFAULT_GLOBAL_ALLOC_PCT)
     min_alloc = cfg.get("min_alloc_pct", MIN_ALLOC_PCT)
@@ -120,8 +119,8 @@ def compute_simple_allocation(
     base_alloc = unit.seat_alloc_pct if unit.seat_alloc_pct is not None else global_alloc
     is_override = unit.seat_alloc_pct is not None
 
-    # Step 2: Growth/attrition projection
-    net_change = unit.hc_growth_pct - unit.attrition_pct
+    # Step 2: Growth projection
+    net_change = unit.hc_growth_pct
     horizon_factor = 1 + (net_change * (horizon_months / 12))
     adjusted_alloc = base_alloc * horizon_factor
 
@@ -139,7 +138,6 @@ def compute_simple_allocation(
         is_override=is_override,
         global_alloc=global_alloc,
         hc_growth_pct=unit.hc_growth_pct,
-        attrition_pct=unit.attrition_pct,
         horizon_months=horizon_months,
         horizon_factor=horizon_factor,
         adjusted_alloc=adjusted_alloc,

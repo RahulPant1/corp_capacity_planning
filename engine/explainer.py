@@ -10,7 +10,6 @@ def explain_allocation(
     monthly_max_hc: float,
     avg_rto_days: float,
     hc_growth_pct: float,
-    attrition_pct: float,
     horizon_months: int,
     base_ratio: float,
     peak_buffer: float,
@@ -39,10 +38,9 @@ def explain_allocation(
         f"scaling factor {rto_factor:.2f}, scaled ratio {scaled_ratio:.1%}"
     )
 
-    net_change = hc_growth_pct - attrition_pct
     steps.append(
-        f"Step 4 - Growth/Attrition: Growth {hc_growth_pct:+.1%}, Attrition {attrition_pct:+.1%} "
-        f"=> net {net_change:+.1%} over {horizon_months}mo => factor {horizon_factor:.3f}"
+        f"Step 4 - Growth projection: Growth {hc_growth_pct:+.1%} "
+        f"over {horizon_months}mo => factor {horizon_factor:.3f}"
     )
 
     steps.append(
@@ -70,7 +68,6 @@ def explain_simple_allocation(
     is_override: bool,
     global_alloc: float,
     hc_growth_pct: float,
-    attrition_pct: float,
     horizon_months: int,
     horizon_factor: float,
     adjusted_alloc: float,
@@ -91,10 +88,9 @@ def explain_simple_allocation(
             f"Step 1 - Allocation %: Global default = {base_alloc:.0%}"
         )
 
-    net_change = hc_growth_pct - attrition_pct
     steps.append(
-        f"Step 2 - Growth/Attrition: Growth {hc_growth_pct:+.1%}, Attrition {attrition_pct:+.1%} "
-        f"=> net {net_change:+.1%} over {horizon_months}mo => factor {horizon_factor:.3f}"
+        f"Step 2 - Growth projection: Growth {hc_growth_pct:+.1%} "
+        f"over {horizon_months}mo => factor {horizon_factor:.3f}"
     )
 
     steps.append(

@@ -28,6 +28,31 @@ def main():
     )
 
     initialize_session_state()
+
+    st.markdown("""
+<style>
+/* Hide the Streamlit top toolbar to reclaim vertical space */
+header[data-testid="stHeader"] { display: none !important; }
+/* Reduce top padding — safe now that header is hidden */
+div.block-container, div[data-testid="stMainBlockContainer"] {
+    padding-top: 1rem !important;
+    padding-bottom: 1rem !important;
+}
+/* Reduce interior padding inside each tab panel */
+.stTabs [data-baseweb="tab-panel"] {
+    padding-top: 0.5rem !important;
+}
+/* Smaller tab labels so all 6 fit in one row */
+button[data-baseweb="tab"] {
+    font-size: 0.78rem !important;
+    padding-left: 0.6rem !important;
+    padding-right: 0.6rem !important;
+}
+/* Hide Streamlit footer to reduce bottom scroll */
+footer { display: none !important; }
+</style>
+""", unsafe_allow_html=True)
+
     sidebar_state = render_sidebar()
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([

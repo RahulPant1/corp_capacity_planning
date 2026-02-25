@@ -387,6 +387,8 @@ def render(sidebar_state):
             rto_compliance_map = {rc["unit_name"]: rc for rc in compliance}
 
         # Build enriched table
+        unit_map_results = {u.unit_name: u for u in units}
+        opt_applied = any(a.allocated_seats != a.effective_demand_seats for a in allocs)
         result_rows = []
         for a in allocs:
             ra = rto_alert_map.get(a.unit_name)
@@ -402,25 +404,37 @@ def render(sidebar_state):
             else:
                 rto_status = "N/A"
 
+            u_res = unit_map_results.get(a.unit_name)
+            proj_hc = round(u_res.projected_hc(scenario.planning_horizon_months)) if u_res else 0
+            effective_alloc_pct = a.allocated_seats / proj_hc if proj_hc > 0 else 0.0
+
             result_rows.append({
                 "Unit": a.unit_name,
-                "Alloc %": f"{a.recommended_alloc_pct:.1%}",
-                "Demand": a.effective_demand_seats,
-                "Allocated": a.allocated_seats,
-                "Gap": a.seat_gap,
+                "Policy Alloc %": f"{a.recommended_alloc_pct:.1%}",
+                "Effective Alloc %": f"{effective_alloc_pct:.1%}",
+                "Policy Demand": a.effective_demand_seats,
+                "Allocated Seats": a.allocated_seats,
+                "Gap (vs Policy)": a.seat_gap,
                 "RTO Need": rto_need,
                 "RTO Status": rto_status,
                 "Fragmentation": f"{a.fragmentation_score:.2f}",
                 "Overridden": "Yes" if a.is_overridden else "",
             })
 
+        if opt_applied:
+            st.info(
+                "Optimization applied — **Allocated Seats** and **Gap (vs Policy)** reflect "
+                "optimizer output. **Policy Alloc %** and **Policy Demand** remain rule-based "
+                "for comparison."
+            )
+        st.dataframe(pd.DataFrame(result_rows), use_container_width=True)
         st.caption(
-            "**Fragmentation (0–1):** how spread out a unit is across floors. "
-            "0 = all on one floor (ideal). Values above 0.5 suggest consolidation opportunity. "
-            "**RTO Need:** attendance-based seat need — *(Median HC + Peak Buffer) × (RTO Days / 5)*. "
+            "**Policy Alloc %** = desk-ratio rule from Admin settings. "
+            "**Effective Alloc %** = Allocated Seats ÷ Projected HC. "
+            "**Gap (vs Policy)** = Allocated − Policy Demand (negative = shortfall). "
+            "**Fragmentation (0–1):** 0 = all on one floor (ideal). "
             "**RTO Status** (if RTO mandate set): actual / target days/week with ✓/✗."
         )
-        st.dataframe(pd.DataFrame(result_rows), use_container_width=True)
 
         # Allocation % formula expander
         with st.expander("How is Allocation % calculated?", expanded=False):

@@ -282,9 +282,9 @@ CPG offices are over-allocated using static rules that ignore actual attendance.
 3. **Scenario Lab → Run Simulation → Results** *(1:00)*
    - Click **"Run Simulation"**
    - Point to the **4 metric cards** above the results table (Total Demand, Total Allocated, Net Gap, Units at Risk)
-   - Point to the **results table** — highlight units that turned RED or AMBER
+   - Point to the **results table** — highlight the `Policy Demand` vs `Allocated Seats` columns; point to `Gap (vs Policy)` for units that turned at-risk
    - Point to **Scenario Impact Summary** — read out the seat gap and RTO need changes
-   - *Say:* "Instantly we can see the snapshot — [X] units at risk, a net gap of [Y] seats. The results table shows every unit's status. No spreadsheet formula maintenance required."
+   - *Say:* "Instantly we can see the snapshot — [X] units at risk, a net gap of [Y] seats. The table separates rule-based demand from actual allocation — no guessing which number came from where."
 
 4. **Scenario Lab → Changes vs. Baseline** *(0:30)*
    - Scroll to the **Changes vs. Baseline** section
@@ -367,7 +367,7 @@ CPG offices are over-allocated using static rules that ignore actual attendance.
 | 0:45 | Executive Dashboard | Show KPIs + alert badge → open RTO Alerts expander | "🔴/🟡/⚠️ badge = 30-second read for leadership" |
 | 2:00 | Scenario Lab | Create Aggressive Growth template | "Scenario in 15 seconds" |
 | 2:30 | Scenario Lab | Exclude a floor, re-run | "Floor offline — instant impact" |
-| 3:00 | Scenario Lab | Show 4 metric cards + results table (RED/AMBER units) | "Snapshot: [N] units at risk, [X] seat gap" |
+| 3:00 | Scenario Lab | Show 4 metric cards + results table (Policy Demand vs Allocated Seats, Gap (vs Policy)) | "Snapshot: [N] units at risk, [X] seat gap" |
 | 3:30 | Scenario Lab | Show Changes vs. Baseline | "Before/after, data-backed" |
 | 4:00 | Scenario Lab | Download report | "Board-ready in one click" |
 | 4:30 | Optimization | Note scenario settings caption → RTO-Based run | "How many seats do we actually need?" |

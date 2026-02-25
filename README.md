@@ -181,7 +181,13 @@ Then, for the **active scenario**:
 
 After simulation, the Scenario Lab shows:
 - **4 summary metric cards** — Total Demand, Total Allocated, Net Gap, Units at Risk (above the results table)
-- **Enriched results table** — per-unit allocation, demand, gap, RTO Need, RTO Status, fragmentation
+- **Enriched results table** — per-unit columns with explicit source labelling:
+  - `Policy Alloc %` — desk-ratio % from Admin rule (unchanged by optimizer)
+  - `Effective Alloc %` — Allocated Seats ÷ Projected HC (reflects optimizer result)
+  - `Policy Demand` — seats needed under the Admin rule
+  - `Allocated Seats` — seats actually assigned (optimizer value after Accept & Apply)
+  - `Gap (vs Policy)` — Allocated − Policy Demand (negative = shortfall)
+  - When optimization has been applied, a blue banner clarifies which columns are rule-based vs optimizer-based
   - *Fragmentation (0–1)*: 0 = all on one floor (ideal); above 0.5 = consolidation opportunity
   - *How is Allocation % calculated?* — expandable formula with step-by-step walkthrough
 - **Scenario Impact Summary** — overall stats, RTO Need explanation, per-unit highlights, key risks

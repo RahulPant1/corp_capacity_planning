@@ -142,22 +142,22 @@ def render(sidebar_state):
 
         col_upload, col_sample = st.columns(2)
         with col_upload:
-            if st.button("Upload & Validate", type="primary", key="btn_upload_single"):
-                if single_file:
-                    try:
-                        b_df, u_df, a_df = load_multi_sheet_excel(single_file)
-                        _load_and_validate(b_df, u_df, a_df)
-                    except Exception as e:
-                        st.error(f"Error loading file: {e}")
-                else:
-                    st.warning("Please upload an Excel file.")
-
+            btn_upload_single = st.button("Upload & Validate", type="primary", key="btn_upload_single")
         with col_sample:
-            if st.button("Load Sample Data", key="btn_sample_single"):
-                b_df = generate_buildings_df()
-                u_df = generate_units_df()
-                a_df = generate_attendance_df()
-                _load_and_validate(b_df, u_df, a_df)
+            btn_sample_single = st.button("Load Sample Data", key="btn_sample_single")
+
+        if btn_upload_single:
+            if single_file:
+                try:
+                    b_df, u_df, a_df = load_multi_sheet_excel(single_file)
+                    _load_and_validate(b_df, u_df, a_df)
+                except Exception as e:
+                    st.error(f"Error loading file: {e}")
+            else:
+                st.warning("Please upload an Excel file.")
+
+        if btn_sample_single:
+            _load_and_validate(generate_buildings_df(), generate_units_df(), generate_attendance_df())
 
     else:
         col1, col2, col3 = st.columns(3)
@@ -189,24 +189,24 @@ def render(sidebar_state):
 
         col_upload, col_sample = st.columns(2)
         with col_upload:
-            if st.button("Upload & Validate", type="primary", key="btn_upload_multi"):
-                if buildings_file and units_file and attendance_file:
-                    try:
-                        b_df = load_file(buildings_file)
-                        u_df = load_file(units_file)
-                        a_df = load_file(attendance_file)
-                        _load_and_validate(b_df, u_df, a_df)
-                    except Exception as e:
-                        st.error(f"Error loading files: {e}")
-                else:
-                    st.warning("Please upload all three files.")
-
+            btn_upload_multi = st.button("Upload & Validate", type="primary", key="btn_upload_multi")
         with col_sample:
-            if st.button("Load Sample Data", key="btn_sample_multi"):
-                b_df = generate_buildings_df()
-                u_df = generate_units_df()
-                a_df = generate_attendance_df()
-                _load_and_validate(b_df, u_df, a_df)
+            btn_sample_multi = st.button("Load Sample Data", key="btn_sample_multi")
+
+        if btn_upload_multi:
+            if buildings_file and units_file and attendance_file:
+                try:
+                    b_df = load_file(buildings_file)
+                    u_df = load_file(units_file)
+                    a_df = load_file(attendance_file)
+                    _load_and_validate(b_df, u_df, a_df)
+                except Exception as e:
+                    st.error(f"Error loading files: {e}")
+            else:
+                st.warning("Please upload all three files.")
+
+        if btn_sample_multi:
+            _load_and_validate(generate_buildings_df(), generate_units_df(), generate_attendance_df())
 
     st.divider()
 

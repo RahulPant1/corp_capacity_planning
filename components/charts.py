@@ -62,7 +62,11 @@ def floor_heatmap(
         color_continuous_scale=["#4A90D9", "#F5C542", "#E8734A"],
         range_color=[0, 1],
     )
-    fig.update_layout(height=max(300, len(df) * 35), yaxis_type="category")
+    fig.update_layout(
+        height=max(300, len(df) * 35),
+        yaxis_type="category",
+        coloraxis_colorbar=dict(title="Utilization %", tickformat=".0%"),
+    )
     fig.update_traces(texttemplate="%{x:.0%}", textposition="auto")
     return fig
 
@@ -91,9 +95,11 @@ def unit_floor_heatmap(
         x=units,
         y=sorted(floors, reverse=True),
         colorscale="YlOrRd",
+        zmin=0,
         text=matrix,
         texttemplate="%{text}",
         hovertemplate="Floor: %{y}<br>Unit: %{x}<br>Seats: %{z}<extra></extra>",
+        colorbar=dict(title="Seats"),
     ))
     fig.update_layout(
         title="Unit Seat Distribution by Floor",

@@ -70,6 +70,10 @@ def render_sidebar() -> SidebarState:
                 st.caption("🔒 Locked — edits disabled")
             if active.unit_overrides:
                 st.caption(f"Overrides: {len(active.unit_overrides)} units")
+            if active.last_run_at:
+                st.caption(f"Last run: {active.last_run_at.strftime('%b %d, %H:%M')}")
+            else:
+                st.caption("Not yet run — go to Scenario Lab")
 
     return SidebarState(
         scenario_id=selected_id,

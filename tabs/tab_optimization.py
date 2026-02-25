@@ -85,7 +85,7 @@ def render(sidebar_state):
         )
 
     # --- Active Constraints (from scenario) ---
-    with st.expander("Active Constraints (from Scenario)", expanded=False):
+    with st.expander("Scenario Settings in Effect", expanded=False):
         if len(effective_floors) < len(raw_floors) or effective_total < raw_total:
             st.markdown(
                 f"- **Floor capacity**: {len(raw_floors)} floors ({raw_total:,} seats) "
@@ -103,8 +103,9 @@ def render(sidebar_state):
                 st.markdown(f"- **Target RTO**: {target_rto} days/week for all units")
 
     # --- Advanced Runtime Constraints ---
-    with st.expander("Advanced Constraints (optional, applied at run time)", expanded=False):
+    with st.expander("Runtime Constraints (Optional)", expanded=False):
         st.caption("These constraints are applied on top of the objective. They may make the problem infeasible if too strict — the optimizer will warn you.")
+        st.caption("If constraints make the problem infeasible, the optimizer relaxes them and shows a warning.")
 
         col1, col2 = st.columns(2)
 
@@ -156,6 +157,17 @@ def render(sidebar_state):
     } or None
 
     st.divider()
+
+    # Scenario settings summary
+    active_items = []
+    if scenario.params.global_rto_mandate_days:
+        active_items.append(f"RTO mandate: {scenario.params.global_rto_mandate_days}d/wk")
+    if scenario.params.excluded_floors:
+        active_items.append(f"{len(scenario.params.excluded_floors)} floors excluded")
+    if active_items:
+        st.caption("Scenario settings: " + " · ".join(active_items))
+    else:
+        st.caption("No scenario constraints active — running against full floor supply.")
 
     # --- Run Optimization ---
     col1, col2 = st.columns([1, 3])
@@ -255,8 +267,8 @@ def render(sidebar_state):
         if result.savings_summary:
             sv = result.savings_summary
             col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Allocation Rule Seats", f"{sv['allocation_rule_seats']:,}")
-            col2.metric("RTO-Based Seats", f"{sv['rto_based_seats']:,}")
+            col1.metric("Policy-Based Seats (80% Rule)", f"{sv['allocation_rule_seats']:,}")
+            col2.metric("Attendance-Based Seats", f"{sv['rto_based_seats']:,}")
             col3.metric("Seats Saved", f"{sv['seats_saved']:,}",
                         delta=f"{sv['seats_saved']:+,}",
                         delta_color="normal" if sv['seats_saved'] >= 0 else "inverse")
@@ -266,6 +278,8 @@ def render(sidebar_state):
 
         # Before/After comparison
         st.subheader("Before / After Comparison")
+        st.caption("Per-unit seat count before (policy rule) and after (optimization). "
+                   "Green = seats freed, Red = seats added.")
         if result.before_after:
             ba_df = pd.DataFrame(result.before_after)
             render_comparison_table(ba_df)

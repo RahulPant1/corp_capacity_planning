@@ -47,6 +47,7 @@ def render(sidebar_state):
             st.caption("**Tip:** Use 'Make Active' to load a scenario below. Locked scenarios (🔒) disable edits.")
 
             # --- Lock/Unlock | Make Active | Delete ---
+            st.caption("**Actions** — select a scenario in each column, then click the button.")
             col1, col2, col3 = st.columns(3)
             with col1:
                 non_baseline = [s for s in mgmt_scenarios if s != "baseline"]
@@ -70,7 +71,7 @@ def render(sidebar_state):
                     st.rerun()
             with col3:
                 deletable = [s for s in mgmt_scenarios if s != "baseline" and not mgmt_scenarios[s].is_locked]
-                del_id = st.selectbox("Delete", deletable or ["(none)"], key="mgmt_delete_scenario_select")
+                del_id = st.selectbox("Delete (permanent)", deletable or ["(none)"], key="mgmt_delete_scenario_select")
                 if del_id and del_id != "(none)" and st.button("Delete", type="secondary",
                                                                 key="mgmt_btn_delete_scenario"):
                     remove_scenario(del_id)
@@ -349,6 +350,23 @@ def render(sidebar_state):
         st.subheader("Current Scenario Results")
 
         allocs = scenario.allocation_results
+
+        # Summary metric cards
+        _total_demand = sum(a.effective_demand_seats for a in allocs)
+        _total_alloc = sum(a.allocated_seats for a in allocs)
+        _net_gap = _total_alloc - _total_demand
+        _at_risk = sum(
+            1 for a in allocs
+            if (a.seat_gap / a.effective_demand_seats if a.effective_demand_seats else 0)
+            < RISK_AMBER_GAP_PCT
+        )
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Demand", f"{_total_demand:,}")
+        m2.metric("Total Allocated", f"{_total_alloc:,}")
+        m3.metric("Net Gap", f"{_net_gap:+,}",
+                  delta_color="normal" if _net_gap >= 0 else "inverse")
+        m4.metric("Units at Risk", str(_at_risk),
+                  delta_color="inverse" if _at_risk > 0 else "normal")
 
         # Compute RTO data for table enrichment
         att_profiles = get_attendance()

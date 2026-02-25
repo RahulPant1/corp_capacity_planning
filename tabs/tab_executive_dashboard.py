@@ -68,6 +68,13 @@ def render(sidebar_state):
          "delta_color": "inverse" if impacted_units > 0 else "normal"},
     ])
 
+    # Scenario context (always visible)
+    st.caption(
+        f"Active scenario: **{scenario.name}** · Type: {scenario.scenario_type} · "
+        f"Horizon: {scenario.planning_horizon_months} months · "
+        f"Last run: {scenario.last_run_at.strftime('%b %d, %H:%M') if scenario.last_run_at else 'Not yet run'}"
+    )
+
     # Scenario adjustment info
     if has_scenario_adjustments:
         notes = []
@@ -104,8 +111,6 @@ def render(sidebar_state):
     st.divider()
 
     # --- Alerts ---
-    st.subheader("Planning Alerts")
-
     # Collect alerts by category
     capacity_alerts = []
     rto_alerts_list = []
@@ -177,21 +182,41 @@ def render(sidebar_state):
 
     has_any = capacity_alerts or rto_all_data or other_alerts
 
+    st.subheader("Planning Alerts")
+
     if not has_any:
         st.success("No planning alerts — all metrics within acceptable ranges.")
     else:
-        if capacity_alerts:
-            st.error(f"{len(capacity_alerts)} Capacity Alert{'s' if len(capacity_alerts) != 1 else ''}")
-            st.dataframe(pd.DataFrame(capacity_alerts), use_container_width=True, hide_index=True)
+        total_alerts = len(capacity_alerts) + len(rto_alerts_list) + len(other_alerts)
+        if total_alerts > 0:
+            badge_parts = []
+            if capacity_alerts:
+                badge_parts.append(f"🔴 {len(capacity_alerts)} Capacity")
+            if rto_alerts_list:
+                badge_parts.append(f"🟡 {len(rto_alerts_list)} RTO")
+            if other_alerts:
+                badge_parts.append(f"⚠️ {len(other_alerts)} Other")
+            st.markdown(f"**{total_alerts} alert{'s' if total_alerts != 1 else ''}:** " + " · ".join(badge_parts))
 
-        if rto_all_data:
-            st.subheader("RTO-Based Need vs Allocated")
-            fig = rto_need_vs_allocated_bar(rto_all_data)
-            st.plotly_chart(fig, use_container_width=True)
+        with st.expander(f"🔴 Capacity Alerts ({len(capacity_alerts)})", expanded=len(capacity_alerts) > 0):
+            st.caption("Units or floors where allocated seats fall short of demand.")
+            if capacity_alerts:
+                st.dataframe(pd.DataFrame(capacity_alerts), use_container_width=True, hide_index=True)
+            else:
+                st.info("No capacity alerts.")
+
+        with st.expander(f"🟡 RTO Alerts ({len(rto_alerts_list)})", expanded=len(rto_alerts_list) > 0):
+            st.caption("Allocated vs RTO-based need by unit. Chart shows all units; table shows mismatches only.")
+            if rto_all_data:
+                fig = rto_need_vs_allocated_bar(rto_all_data)
+                st.plotly_chart(fig, use_container_width=True)
             if rto_alerts_list:
                 st.warning(f"{len(rto_alerts_list)} unit{'s' if len(rto_alerts_list) != 1 else ''} with allocation mismatch")
                 st.dataframe(pd.DataFrame(rto_alerts_list), use_container_width=True, hide_index=True)
 
-        if other_alerts:
-            st.info(f"{len(other_alerts)} Other Alert{'s' if len(other_alerts) != 1 else ''}")
-            st.dataframe(pd.DataFrame(other_alerts), use_container_width=True, hide_index=True)
+        with st.expander(f"⚠️ Other Alerts ({len(other_alerts)})", expanded=False):
+            st.caption("Fragmentation and cross-building spread issues.")
+            if other_alerts:
+                st.dataframe(pd.DataFrame(other_alerts), use_container_width=True, hide_index=True)
+            else:
+                st.info("No other alerts.")

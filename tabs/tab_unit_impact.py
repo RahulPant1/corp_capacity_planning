@@ -106,7 +106,6 @@ def render(sidebar_state):
             "Projected HC": projected_hc,
             "Growth %": f"{u.hc_growth_pct:.1%}",
             "Alloc %": f"{a.recommended_alloc_pct:.1%}",
-            "Overridden": "Yes" if a.is_overridden else "",
             "Demand (seats)": a.effective_demand_seats,
             "Allocated": a.allocated_seats,
             "Gap": a.seat_gap,
@@ -122,7 +121,23 @@ def render(sidebar_state):
         return
 
     df = pd.DataFrame(rows)
+
+    # Risk count summary
+    n_red   = len([r for r in rows if r["Risk Level"] == "RED"])
+    n_amber = len([r for r in rows if r["Risk Level"] == "AMBER"])
+    n_green = len([r for r in rows if r["Risk Level"] == "GREEN"])
+    c1, c2, c3 = st.columns(3)
+    c1.metric("🔴 RED", n_red)
+    c2.metric("🟡 AMBER", n_amber)
+    c3.metric("🟢 GREEN", n_green)
+
     render_risk_table(df)
+
+    st.caption(
+        "Fragmentation (0–1): 0 = all on one floor (ideal). "
+        "RTO Status: Aligned = seats match attendance need. "
+        "Gap % = (Allocated − Demand) / Demand."
+    )
 
     # --- Export ---
     csv = df.to_csv(index=False)

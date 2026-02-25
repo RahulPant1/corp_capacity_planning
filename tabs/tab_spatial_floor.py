@@ -92,7 +92,9 @@ def render(sidebar_state):
     for fu in floor_util:
         if tower_filter and fu["tower_id"] != tower_filter:
             continue
-        units_str = ", ".join(f"{u}: {s}" for u, s in fu["units"].items()) if fu["units"] else "—"
+        largest_unit = max(fu["units"], key=fu["units"].get) if fu["units"] else "—"
+        largest_seats = fu["units"].get(largest_unit, 0) if fu["units"] else 0
+        largest_str = f"{largest_unit} ({largest_seats})" if largest_unit != "—" else "—"
         detail_rows.append({
             "Floor": fu["floor_id"],
             "Building": fu["building_name"],
@@ -103,7 +105,7 @@ def render(sidebar_state):
             "Available": fu["available_seats"],
             "Utilization": f"{fu['utilization_pct']:.0%}",
             "# Units": fu["unit_count"],
-            "Units (seats)": units_str,
+            "Largest Unit": largest_str,
         })
 
     if detail_rows:

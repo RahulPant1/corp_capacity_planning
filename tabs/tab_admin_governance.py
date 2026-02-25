@@ -132,6 +132,13 @@ def render(sidebar_state):
             type=["xlsx"],
             key="upload_single",
         )
+        st.caption(
+            "Required columns — "
+            "**Buildings:** Building ID, Tower ID, Floor Number, Total Seats · "
+            "**Units:** Unit Name, Current Total Headcount, HC Growth Forecast (%) · "
+            "**Attendance:** Unit Name, Monthly Median In-Office Strength, "
+            "Monthly Max In-Office Strength, Avg RTO Days/Week"
+        )
 
         col_upload, col_sample = st.columns(2)
         with col_upload:
@@ -172,6 +179,13 @@ def render(sidebar_state):
                 type=["csv", "xlsx"],
                 key="upload_attendance",
             )
+        st.caption(
+            "Required columns — "
+            "**Buildings:** Building ID, Tower ID, Floor Number, Total Seats · "
+            "**Units:** Unit Name, Current Total Headcount, HC Growth Forecast (%) · "
+            "**Attendance:** Unit Name, Monthly Median In-Office Strength, "
+            "Monthly Max In-Office Strength, Avg RTO Days/Week"
+        )
 
         col_upload, col_sample = st.columns(2)
         with col_upload:

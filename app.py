@@ -36,7 +36,7 @@ def main():
         "🏗️ Spatial / Floor View",
         "🧪 Scenario Lab",
         "⚡ Optimization",
-        "⚙️ Admin & Governance",
+        "⚙️ Admin",
     ])
 
     with tab1:

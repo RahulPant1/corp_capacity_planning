@@ -3,13 +3,15 @@
 import streamlit as st
 import pandas as pd
 import copy
+from datetime import datetime, date
 
 from data.session_store import (
     get_active_scenario, get_scenarios, get_units, get_attendance, get_floors,
     get_rule_config, update_scenario, add_audit_entry, is_data_loaded,
     get_active_scenario_id, get_last_data_edit,
+    add_scenario, remove_scenario, set_active_scenario_id,
 )
-from models.scenario import ScenarioOverride, ScenarioParams
+from models.scenario import Scenario, ScenarioOverride, ScenarioParams
 from engine.scenario_engine import run_scenario, compare_scenarios, apply_overrides
 from engine.allocation_engine import compute_rto_alerts
 from engine.report_generator import generate_scenario_report
@@ -18,6 +20,7 @@ from components.charts import scenario_comparison_bar
 from config.defaults import (
     RISK_RED_GAP_PCT, RISK_RED_FRAGMENTATION,
     RISK_AMBER_GAP_PCT, RISK_AMBER_FRAGMENTATION,
+    SCENARIO_TYPES,
 )
 
 
@@ -25,15 +28,148 @@ def render(sidebar_state):
     """Render the Scenario Lab tab."""
     st.header("Scenario Lab")
 
+    # ── Manage Scenarios ──────────────────────────────────────────────
+    with st.expander("Manage Scenarios", expanded=False):
+        mgmt_scenarios = get_scenarios()
+
+        # --- Scenarios list ---
+        if mgmt_scenarios:
+            scenario_data = []
+            for sid, s in mgmt_scenarios.items():
+                scenario_data.append({
+                    "ID": sid, "Name": s.name, "Type": s.scenario_type,
+                    "Horizon": f"{s.planning_horizon_months}mo",
+                    "Locked": "🔒 Yes" if s.is_locked else "No",
+                    "Overrides": len(s.unit_overrides),
+                    "Created": s.created_at.strftime("%Y-%m-%d %H:%M"),
+                })
+            st.dataframe(pd.DataFrame(scenario_data), use_container_width=True)
+            st.caption("**Tip:** Use 'Make Active' to load a scenario below. Locked scenarios (🔒) disable edits.")
+
+            # --- Lock/Unlock | Make Active | Delete ---
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                non_baseline = [s for s in mgmt_scenarios if s != "baseline"]
+                lock_id = st.selectbox("Lock / Unlock", non_baseline or ["(none)"],
+                                       key="mgmt_lock_scenario_select")
+                if lock_id and lock_id != "(none)" and st.button("Toggle Lock", key="mgmt_btn_toggle_lock"):
+                    sc = mgmt_scenarios[lock_id]
+                    sc.is_locked = not sc.is_locked
+                    update_scenario(sc)
+                    add_audit_entry("lock" if sc.is_locked else "unlock", lock_id, "is_locked",
+                                    str(not sc.is_locked), str(sc.is_locked))
+                    st.rerun()
+            with col2:
+                make_active_id = st.selectbox("Make Active", list(mgmt_scenarios.keys()),
+                                              key="mgmt_make_active_select")
+                if st.button("Make Active →", key="mgmt_btn_make_active"):
+                    set_active_scenario_id(make_active_id)
+                    sc = mgmt_scenarios[make_active_id]
+                    lock_note = " (locked 🔒 — edits disabled)" if sc.is_locked else ""
+                    st.success(f"Active scenario set to '{sc.name}'{lock_note}.")
+                    st.rerun()
+            with col3:
+                deletable = [s for s in mgmt_scenarios if s != "baseline" and not mgmt_scenarios[s].is_locked]
+                del_id = st.selectbox("Delete", deletable or ["(none)"], key="mgmt_delete_scenario_select")
+                if del_id and del_id != "(none)" and st.button("Delete", type="secondary",
+                                                                key="mgmt_btn_delete_scenario"):
+                    remove_scenario(del_id)
+                    add_audit_entry("delete", del_id, "scenario", del_id, "deleted")
+                    st.rerun()
+
+        st.divider()
+
+        # --- Quick-Create from Template ---
+        st.caption("**Quick-Create from Template**")
+        TEMPLATES = {
+            "RTO Mandate (4 days)": {
+                "type": "efficiency",
+                "desc": "Company-wide 4 days/week in-office mandate. Tests seat demand when attendance rises.",
+                "horizon": 6, "params": ScenarioParams(global_rto_mandate_days=4.0), "overrides": None,
+            },
+            "Aggressive Growth": {
+                "type": "growth",
+                "desc": "High-priority units grow 25%, others 10%. Tests supply against rapid expansion.",
+                "horizon": 6, "params": ScenarioParams(), "overrides": "_growth_heavy",
+            },
+            "Downsizing (-15% Growth)": {
+                "type": "attrition",
+                "desc": "All units shrink by 15%. Tests how much seat capacity is freed up.",
+                "horizon": 6, "params": ScenarioParams(), "overrides": "_downsizing",
+            },
+            "Floor Consolidation (Give Up Floors)": {
+                "type": "consolidation",
+                "desc": "Excludes 4 floors. Simulates subleasing or taking floors offline.",
+                "horizon": 6,
+                "params": ScenarioParams(excluded_floors=["B1-T1-F4", "B1-T1-F5", "B2-T1-F4", "B2-T1-F5"]),
+                "overrides": None,
+            },
+            "Hybrid Efficiency (Low RTO)": {
+                "type": "efficiency",
+                "desc": "All units drop to 2 days/week RTO. Tests seat sharing under low attendance.",
+                "horizon": 6, "params": ScenarioParams(), "overrides": "_low_rto",
+            },
+        }
+        template_name = st.selectbox("Select template", list(TEMPLATES.keys()), key="mgmt_template_select")
+        tmpl = TEMPLATES[template_name]
+        st.info(tmpl["desc"])
+        if st.button("Create from Template", key="mgmt_btn_create_template"):
+            sid = template_name.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "_")
+            sid += "_" + datetime.now().strftime("%H%M%S")
+            current_units = get_units() if is_data_loaded() else []
+            overrides = {}
+            if tmpl["overrides"] == "_growth_heavy":
+                for u in current_units:
+                    overrides[u.unit_name] = ScenarioOverride(
+                        unit_name=u.unit_name,
+                        hc_growth_pct=0.25 if u.business_priority == "High" else 0.10)
+            elif tmpl["overrides"] == "_downsizing":
+                for u in current_units:
+                    overrides[u.unit_name] = ScenarioOverride(unit_name=u.unit_name, hc_growth_pct=-0.15)
+            elif tmpl["overrides"] == "_low_rto":
+                for u in current_units:
+                    overrides[u.unit_name] = ScenarioOverride(unit_name=u.unit_name, avg_rto_days=2.0)
+            new_s = Scenario(scenario_id=sid, name=template_name, description=tmpl["desc"],
+                             scenario_type=tmpl["type"], planning_horizon_months=tmpl["horizon"],
+                             params=tmpl["params"], unit_overrides=overrides)
+            add_scenario(new_s)
+            add_audit_entry("create_template", sid, "scenario", "", template_name)
+            st.success(f"'{template_name}' created. Use 'Make Active' above to load it.")
+            st.rerun()
+
+        st.divider()
+
+        # --- Create Custom Scenario ---
+        st.caption("**Create Custom Scenario**")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            new_name = st.text_input("Scenario Name", key="mgmt_new_scenario_name")
+            new_type = st.selectbox("Type", SCENARIO_TYPES, key="mgmt_new_scenario_type")
+        with col_b:
+            new_horizon = st.selectbox("Planning Horizon (months)", [3, 6], index=1,
+                                       key="mgmt_new_scenario_horizon")
+            new_desc = st.text_input("Description (optional)", key="mgmt_new_scenario_desc")
+        if st.button("Create Scenario", key="mgmt_btn_create_scenario"):
+            if not new_name:
+                st.warning("Please enter a scenario name.")
+            else:
+                sid = new_name.lower().replace(" ", "_") + "_" + datetime.now().strftime("%H%M%S")
+                new_s = Scenario(scenario_id=sid, name=new_name, description=new_desc,
+                                 scenario_type=new_type, planning_horizon_months=new_horizon)
+                add_scenario(new_s)
+                add_audit_entry("create", sid, "scenario", "", new_name)
+                st.success(f"Scenario '{new_name}' created. Use 'Make Active' above to load it.")
+                st.rerun()
+
     if not is_data_loaded():
-        st.info("No data loaded. Please upload data in the Admin & Governance tab.")
+        st.info("No data loaded. Please upload data in the Admin tab.")
         return
 
     scenarios = get_scenarios()
     scenario = get_active_scenario()
 
     if not scenario:
-        st.info("No active scenario. Create one in Admin & Governance.")
+        st.info("No active scenario. Use 'Manage Scenarios' above to create one.")
         return
 
     if scenario.is_locked:
@@ -70,10 +206,11 @@ def render(sidebar_state):
     with col2:
         floors = get_floors()
         all_floor_ids = sorted(set(f.floor_id for f in floors))
+        valid_excluded = [f for f in scenario.params.excluded_floors if f in all_floor_ids]
         excluded = st.multiselect(
             "Excluded Floors",
             all_floor_ids,
-            default=scenario.params.excluded_floors,
+            default=valid_excluded,
             key="scenario_excluded_floors",
             disabled=scenario.is_locked,
             help="Remove specific floors from the available supply (e.g., renovation, sublease).",
@@ -387,7 +524,6 @@ def render(sidebar_state):
                 "Export an Excel report of this scenario for management review. "
                 "Includes allocation results, floor assignments, risks, and the most recent optimization run (if any)."
             )
-            from datetime import date
             opt_history = st.session_state.get("optimization_history", [])
             report_bytes = generate_scenario_report(
                 scenario=scenario,

@@ -24,7 +24,6 @@ UNIT_REQUIRED_COLUMNS = [
     "Unit Name",
     "Current Total Headcount",
     "HC Growth Forecast (%)",
-    "Attrition Forecast (%)",
 ]
 
 ATTENDANCE_REQUIRED_COLUMNS = [

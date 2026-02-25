@@ -28,7 +28,7 @@ The app opens at `http://localhost:8501`.
 
 ## Quick Start
 
-1. Open the app and go to the **Admin & Governance** tab
+1. Open the app and go to the **Admin** tab
 2. Click **"Load Sample Data"** to load pre-built test data (2 buildings, 20 floors, 8 business units)
 3. Go to **Scenario Lab** and click **"Run Simulation"** to compute the baseline allocation
 4. Explore results across all tabs
@@ -37,7 +37,7 @@ The app opens at `http://localhost:8501`.
 
 ## Uploading Your Data
 
-Upload your data via the **Admin & Governance** tab. You have two options:
+Upload your data via the **Admin** tab. You have two options:
 
 ### Option A: Single Excel File (Recommended)
 
@@ -160,7 +160,17 @@ Physical seat utilization across towers and floors:
 
 ### Tab 4: Scenario Lab
 
-Create and test "what-if" scenarios:
+The central hub for scenario creation and "what-if" analysis. At the top:
+
+**Manage Scenarios** *(collapsible panel)*:
+- View all scenarios with type, horizon, lock status, and creation time
+- **Lock / Unlock** — protect a scenario from edits (shows 🔒 in sidebar selector)
+- **Make Active →** — switch to a different scenario without leaving the tab
+- **Delete** — remove non-baseline, non-locked scenarios
+- **Quick-Create from Template** — 5 pre-built scenario templates (see below)
+- **Create Custom Scenario** — name, type, horizon, and description
+
+Then, for the **active scenario**:
 
 1. Adjust **scenario-wide controls**: global RTO mandate, excluded floors
 2. Edit **unit-level overrides**: growth % (positive = expansion, negative = downsizing), allocation % override
@@ -195,19 +205,18 @@ LP-based seat optimization using PuLP. **Run Simulation first** — Optimization
 - **Sensitivity Analysis** — auto-runs Lean/Balanced/Conservative buffer presets and shows seat demand range
 - "Accept & Apply" pushes results to Dashboard, Spatial View, and Unit Impact
 
-### Tab 6: Admin & Governance
+### Tab 6: Admin
 
 - **Data Upload** — single Excel file (3 tabs) or three separate files, or load sample data
 - **Edit Base Data** — modify floor capacities, unit headcounts, attendance & RTO data, and per-unit seat allocation %
 - **Rule Configuration** — set global allocation %, policy bounds, planning buffer level (Lean / Balanced / Conservative), RTO alert threshold
-- **Scenario Management** — create, lock/unlock, delete, or **Make Active** (switch active scenario from Admin). Locked scenarios show 🔒 in the sidebar selector.
 - **Audit Trail** — view and export a log of all changes, overrides, and actions
 
 ---
 
 ## Configuration Parameters
 
-Adjustable in **Admin & Governance > Rule Configuration**.
+Adjustable in **Admin > Rule Configuration**.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -229,12 +238,12 @@ Adjustable in **Admin & Governance > Rule Configuration**.
 
 ## Scenario Templates
 
-5 pre-built templates available under **Admin & Governance > Quick-Create from Template**:
+5 pre-built templates available in **Scenario Lab > Manage Scenarios > Quick-Create from Template**:
 
 1. **RTO Mandate (4 days)** — What happens if we mandate 4 days/week in-office?
 2. **Aggressive Growth** — Can we absorb 25% growth in key units?
-3. **High Attrition / Downsizing** — How many seats free up with 15% attrition?
-4. **Floor Consolidation (-20%)** — What if we lose 20% floor space?
+3. **Downsizing (-15% Growth)** — How many seats free up when headcount contracts by 15%?
+4. **Floor Consolidation (Give Up Floors)** — What if we take 4 floors offline for sublease or renovation?
 5. **Hybrid Efficiency (Low RTO)** — How much do we save at 2 days/week?
 
 ---

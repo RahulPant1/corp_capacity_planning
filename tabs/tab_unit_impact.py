@@ -105,7 +105,6 @@ def render(sidebar_state):
             "Current HC": u.current_total_hc,
             "Projected HC": projected_hc,
             "Growth %": f"{u.hc_growth_pct:.1%}",
-            "Attrition %": f"{u.attrition_pct:.1%}",
             "Alloc %": f"{a.recommended_alloc_pct:.1%}",
             "Overridden": "Yes" if a.is_overridden else "",
             "Demand (seats)": a.effective_demand_seats,

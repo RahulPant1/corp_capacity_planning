@@ -12,12 +12,10 @@ from data.validator import (
 from data.sample_data import generate_buildings_df, generate_units_df, generate_attendance_df
 from data.session_store import (
     set_floors, set_units, set_attendance, set_data_loaded,
-    get_scenarios, get_active_scenario_id, set_active_scenario_id, add_scenario, remove_scenario,
-    update_scenario, create_baseline_scenario, get_audit_log, get_rule_config,
+    create_baseline_scenario, get_audit_log, get_rule_config,
     set_rule_config, add_audit_entry, is_data_loaded, set_last_data_edit,
 )
-from models.scenario import Scenario, ScenarioParams
-from config.defaults import SCENARIO_TYPES, PLANNING_BUFFER_PRESETS, DEFAULT_PLANNING_BUFFER
+from config.defaults import PLANNING_BUFFER_PRESETS, DEFAULT_PLANNING_BUFFER
 
 
 def _load_and_validate(buildings_df, units_df, attendance_df):
@@ -111,7 +109,7 @@ def _load_and_validate(buildings_df, units_df, attendance_df):
 
 def render(sidebar_state):
     """Render the Admin & Governance tab."""
-    st.header("Admin & Governance")
+    st.header("Admin")
 
     # --- Data Upload Section ---
     st.subheader("Data Upload")
@@ -455,185 +453,6 @@ def render(sidebar_state):
         set_rule_config(new_config)
         add_audit_entry("config_change", "global", "rule_config", str(config), str(new_config))
         st.success("Rule configuration saved.")
-
-    st.divider()
-
-    # --- Scenario Management ---
-    st.subheader("Scenario Management")
-
-    scenarios = get_scenarios()
-    if scenarios:
-        scenario_data = []
-        for sid, s in scenarios.items():
-            scenario_data.append({
-                "ID": sid,
-                "Name": s.name,
-                "Type": s.scenario_type,
-                "Horizon": f"{s.planning_horizon_months}mo",
-                "Locked": "Yes" if s.is_locked else "No",
-                "Overrides": len(s.unit_overrides),
-                "Created": s.created_at.strftime("%Y-%m-%d %H:%M"),
-            })
-        st.dataframe(pd.DataFrame(scenario_data), use_container_width=True)
-
-        st.caption(
-            "**Tip:** Select a scenario here and click 'Make Active' to view it in the Scenario Lab. "
-            "Locked scenarios (🔒) disable edits — unlock to make changes."
-        )
-
-        # Lock/Unlock + Make Active
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            non_baseline = [s for s in scenarios if s != "baseline"]
-            lock_id = st.selectbox("Select scenario to lock/unlock",
-                                    non_baseline,
-                                    key="lock_scenario_select")
-            if lock_id and st.button("Toggle Lock"):
-                s = scenarios[lock_id]
-                s.is_locked = not s.is_locked
-                update_scenario(s)
-                action = "lock" if s.is_locked else "unlock"
-                add_audit_entry(action, lock_id, "is_locked", str(not s.is_locked), str(s.is_locked))
-                st.rerun()
-
-        with col2:
-            make_active_id = st.selectbox("Select scenario to activate",
-                                           list(scenarios.keys()),
-                                           key="make_active_select")
-            if make_active_id and st.button("Make Active →", key="btn_make_active"):
-                set_active_scenario_id(make_active_id)
-                s_name = scenarios[make_active_id].name
-                lock_note = " (locked 🔒)" if scenarios[make_active_id].is_locked else ""
-                st.success(f"Active scenario set to '{s_name}'{lock_note}. Go to Scenario Lab to view it.")
-                st.rerun()
-
-        with col3:
-            del_id = st.selectbox("Select scenario to delete",
-                                   [s for s in scenarios if s != "baseline" and not scenarios[s].is_locked],
-                                   key="delete_scenario_select")
-            if del_id and st.button("Delete Scenario", type="secondary"):
-                remove_scenario(del_id)
-                add_audit_entry("delete", del_id, "scenario", del_id, "deleted")
-                st.rerun()
-
-    # Quick-create scenario templates
-    from models.scenario import ScenarioOverride
-    with st.expander("Quick-Create from Template", expanded=False):
-        st.caption("Pre-built scenarios with sensible defaults. Select one and click Create.")
-
-        TEMPLATES = {
-            "RTO Mandate (4 days)": {
-                "type": "efficiency",
-                "desc": "Simulates a company-wide mandate requiring 4 days/week in-office. "
-                        "Tests impact on seat demand when attendance increases.",
-                "horizon": 6,
-                "params": ScenarioParams(global_rto_mandate_days=4.0),
-                "overrides": {},
-            },
-            "Aggressive Growth": {
-                "type": "growth",
-                "desc": "All high-priority units grow by 25%, others by 10%. "
-                        "Tests whether current seat supply can handle rapid expansion.",
-                "horizon": 6,
-                "params": ScenarioParams(),
-                "overrides": "_growth_heavy",
-            },
-            "Downsizing (-15% Growth)": {
-                "type": "attrition",
-                "desc": "All units shrink by 15% net growth. "
-                        "Tests how much seat capacity is freed up when headcount contracts.",
-                "horizon": 6,
-                "params": ScenarioParams(),
-                "overrides": "_downsizing",
-            },
-            "Floor Consolidation (Give Up Floors)": {
-                "type": "consolidation",
-                "desc": "Excludes 4 floors from the available supply. "
-                        "Simulates subleasing or taking floors offline for renovation.",
-                "horizon": 6,
-                "params": ScenarioParams(excluded_floors=["B1-T1-F4", "B1-T1-F5", "B2-T1-F4", "B2-T1-F5"]),
-                "overrides": {},
-            },
-            "Hybrid Efficiency (Low RTO)": {
-                "type": "efficiency",
-                "desc": "All units drop to 2 days/week RTO. "
-                        "Tests how much seat sharing improves when attendance is low.",
-                "horizon": 6,
-                "params": ScenarioParams(),
-                "overrides": "_low_rto",
-            },
-        }
-
-        template_name = st.selectbox(
-            "Select template",
-            list(TEMPLATES.keys()),
-            key="template_select",
-        )
-        tmpl = TEMPLATES[template_name]
-        st.info(tmpl["desc"])
-
-        if st.button("Create from Template", key="btn_create_template"):
-            sid = template_name.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "_")
-            sid += "_" + datetime.now().strftime("%H%M%S")
-
-            # Build overrides based on template type
-            overrides = {}
-            current_units = get_units() if is_data_loaded() else []
-
-            if tmpl["overrides"] == "_growth_heavy":
-                for u in current_units:
-                    growth = 0.25 if u.business_priority == "High" else 0.10
-                    overrides[u.unit_name] = ScenarioOverride(
-                        unit_name=u.unit_name, hc_growth_pct=growth,
-                    )
-            elif tmpl["overrides"] == "_downsizing":
-                for u in current_units:
-                    overrides[u.unit_name] = ScenarioOverride(
-                        unit_name=u.unit_name, hc_growth_pct=-0.15,
-                    )
-            elif tmpl["overrides"] == "_low_rto":
-                for u in current_units:
-                    overrides[u.unit_name] = ScenarioOverride(
-                        unit_name=u.unit_name, avg_rto_days=2.0,
-                    )
-
-            scenario = Scenario(
-                scenario_id=sid,
-                name=template_name,
-                description=tmpl["desc"],
-                scenario_type=tmpl["type"],
-                planning_horizon_months=tmpl["horizon"],
-                params=tmpl["params"],
-                unit_overrides=overrides,
-            )
-            add_scenario(scenario)
-            add_audit_entry("create_template", sid, "scenario", "", template_name)
-            st.success(f"Scenario '{template_name}' created. Switch to it in the sidebar, then Run Simulation in the Scenario Lab.")
-            st.rerun()
-
-    # Create custom scenario
-    with st.expander("Create Custom Scenario", expanded=False):
-        new_name = st.text_input("Scenario Name", key="new_scenario_name")
-        new_type = st.selectbox("Scenario Type", SCENARIO_TYPES, key="new_scenario_type")
-        new_desc = st.text_area("Description", key="new_scenario_desc")
-        new_horizon = st.selectbox("Planning Horizon", [3, 6], index=1, key="new_scenario_horizon")
-
-        if st.button("Create Scenario"):
-            if not new_name:
-                st.warning("Please enter a scenario name.")
-            else:
-                sid = new_name.lower().replace(" ", "_") + "_" + datetime.now().strftime("%H%M%S")
-                scenario = Scenario(
-                    scenario_id=sid,
-                    name=new_name,
-                    description=new_desc,
-                    scenario_type=new_type,
-                    planning_horizon_months=new_horizon,
-                )
-                add_scenario(scenario)
-                add_audit_entry("create", sid, "scenario", "", new_name)
-                st.success(f"Scenario '{new_name}' created.")
-                st.rerun()
 
     st.divider()
 

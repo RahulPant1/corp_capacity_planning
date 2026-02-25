@@ -126,36 +126,39 @@ When a Global RTO Mandate is set (e.g., 3.5 days/week), units whose actual RTO i
 
 ### Sidebar (Global Controls)
 
-- **Active Scenario** — switch between baseline and custom scenarios
+- **Active Scenario** — switch between baseline and custom scenarios; shows scenario type, lock status, override count, and last-run timestamp
 - **Planning Horizon** — 3 or 6 months
 
 ### Tab 1: Executive Dashboard
 
 Read-only summary for leadership review:
+- **Scenario context caption** — always-visible line showing active scenario name, type, horizon, and last-run time
 - **KPI cards** — effective supply, total demand, seat gap, units with shortfall
 - **Capacity vs Demand chart** by tower + utilization donut
-- **Grouped Planning Alerts**:
-  - Capacity alerts (floor saturation, unit shortfalls)
-  - RTO alerts chart (allocated vs RTO need per unit) with mismatch table
-  - Other alerts (fragmentation, cross-building spread)
+- **Planning Alerts** with an alert summary badge (`🔴 N Capacity · 🟡 N RTO · ⚠️ N Other`); each category is a collapsible expander:
+  - 🔴 **Capacity Alerts** — floor saturation, unit shortfalls
+  - 🟡 **RTO Alerts** — allocated vs RTO-based need per unit (chart for all units; table for mismatches)
+  - ⚠️ **Other Alerts** — fragmentation, cross-building spread
 - Stale-data warning when base data has changed since the last simulation
 
 ### Tab 2: Unit Impact View
 
-Detailed per-unit analysis. Filter by priority, risk level, or unit name. Each unit shows:
+Detailed per-unit analysis. **🔴/🟡/🟢 count metric cards** above the table summarise risk distribution at a glance. Filter by priority, risk level, or unit name. Each unit shows:
 - Current and projected headcount
 - Recommended allocation % with explanation
 - Effective demand vs allocated seats
-- Gap and fragmentation score
+- Gap, gap %, and fragmentation score
 - Risk level (RED / AMBER / GREEN)
 - RTO Status (Aligned / Under-allocated / Under-utilized)
+
+A legend caption below the table explains Fragmentation, RTO Status, and Gap % definitions.
 
 ### Tab 3: Spatial / Floor View
 
 Physical seat utilization across towers and floors:
-- Floor utilization bar chart (filter by tower)
-- Unit-by-floor heatmap showing seat distribution
-- Floor detail table with unit breakdown
+- Floor utilization bar chart (filter by tower) with Utilization % colorbar
+- Unit-by-floor heatmap showing seat distribution (zmin=0 baseline, Seats colorbar)
+- Floor detail table showing **Largest Unit (N seats)** per floor (replaces the old concatenated "Units (seats)" cell)
 - Consolidation suggestions for fragmented units
 
 ### Tab 4: Scenario Lab
@@ -166,7 +169,7 @@ The central hub for scenario creation and "what-if" analysis. At the top:
 - View all scenarios with type, horizon, lock status, and creation time
 - **Lock / Unlock** — protect a scenario from edits (shows 🔒 in sidebar selector)
 - **Make Active →** — switch to a different scenario without leaving the tab
-- **Delete** — remove non-baseline, non-locked scenarios
+- **Delete (permanent)** — remove non-baseline, non-locked scenarios
 - **Quick-Create from Template** — 5 pre-built scenario templates (see below)
 - **Create Custom Scenario** — name, type, horizon, and description
 
@@ -177,6 +180,7 @@ Then, for the **active scenario**:
 3. Click **"Run Simulation"** to compute results
 
 After simulation, the Scenario Lab shows:
+- **4 summary metric cards** — Total Demand, Total Allocated, Net Gap, Units at Risk (above the results table)
 - **Enriched results table** — per-unit allocation, demand, gap, RTO Need, RTO Status, fragmentation
   - *Fragmentation (0–1)*: 0 = all on one floor (ideal); above 0.5 = consolidation opportunity
   - *How is Allocation % calculated?* — expandable formula with step-by-step walkthrough
@@ -193,12 +197,15 @@ LP-based seat optimization using PuLP. **Run Simulation first** — Optimization
 - **RTO-Based** — allocate by actual attendance patterns, free unused capacity. Shows seats saved and floors freed.
 - **What-If RTO** — simulate a different RTO policy (slider: 1-5 days/week)
 
-**Advanced Runtime Constraints** (optional, applied at run time):
+**Scenario Settings in Effect** *(expander)* — shows active scenario-level constraints (RTO mandate, excluded floors, floor capacity) before running.
+
+**Runtime Constraints (Optional)** *(expander)* — applied at run time on top of the objective:
 - **Max Floors Per Unit** — cap how many floors any unit can spread across (e.g., max 2 floors)
 - **Pin Units to Tower** — restrict specific units to a tower (e.g., Engineering stays in B1-T1)
 - **Minimum Seats Guarantee** — ensure every unit gets at least X% of their demand even under scarcity
 
 **Results include:**
+- **Policy-Based Seats (80% Rule)** vs **Attendance-Based Seats** summary metrics (RTO objectives)
 - Before/after seat and floor count comparison per unit
 - **Cost Estimation Panel** — enter $ per seat/year to see annual cost and savings in dollars
 - **Optimization History** — last 3 runs stored for comparison (objective, seats, floors used)
@@ -207,7 +214,7 @@ LP-based seat optimization using PuLP. **Run Simulation first** — Optimization
 
 ### Tab 6: Admin
 
-- **Data Upload** — single Excel file (3 tabs) or three separate files, or load sample data
+- **Data Upload** — single Excel file (3 tabs) or three separate files, or load sample data; required-column schema hint displayed under each uploader
 - **Edit Base Data** — modify floor capacities, unit headcounts, attendance & RTO data, and per-unit seat allocation %
 - **Rule Configuration** — set global allocation %, policy bounds, planning buffer level (Lean / Balanced / Conservative), RTO alert threshold
 - **Audit Trail** — view and export a log of all changes, overrides, and actions

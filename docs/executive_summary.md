@@ -160,13 +160,14 @@ Every scenario shows:
 
 > "One screen to see if your seat plan is healthy"
 
+- **Scenario context caption**: active scenario name, type, horizon, and last-run time — always visible below the KPI row
 - **KPI cards**: Total supply, demand, seat gap, units with shortfall
 - **Capacity vs. Demand chart**: By tower, at a glance
 - **Utilization donut**: Overall seat utilization percentage
-- **Grouped alerts**:
-  - Capacity alerts (floor saturation, unit shortfalls)
-  - RTO alerts (under-utilized seats, under-allocated units)
-  - Other (fragmentation, cross-building spread)
+- **Planning Alerts** with alert summary badge (`🔴 N Capacity · 🟡 N RTO · ⚠️ N Other`); each category is a collapsible expander:
+  - 🔴 Capacity Alerts — floor saturation, unit shortfalls
+  - 🟡 RTO Alerts — under-utilized seats, under-allocated units (chart for all + mismatch table)
+  - ⚠️ Other Alerts — fragmentation, cross-building spread
 
 ---
 
@@ -253,10 +254,11 @@ CPG offices are over-allocated using static rules that ignore actual attendance.
 
 3. **Executive Dashboard — KPI cards & alerts** *(1:15)*
    - Switch to **Executive Dashboard**
+   - Point to the **scenario context caption** below the KPI row (scenario name, type, horizon, last run)
    - Point to the **KPI cards** (supply, demand, seat gap, units with shortfall)
    - Point to **Capacity vs. Demand chart** — show which towers are over- or under-used
-   - Scroll to **Planning Alerts** — show the RTO chart with under-utilized and under-allocated units
-   - *Say:* "This is the one screen leadership would see every planning cycle. Red alerts mean action required. Right now, we can see [X units] are over-provisioned vs. their actual attendance — seats we're paying for that no one uses."
+   - Scroll to **Planning Alerts** — point to the **alert summary badge** (`🔴 N Capacity · 🟡 N RTO · ⚠️ N Other`), then click into the **🟡 RTO Alerts** expander to show the chart
+   - *Say:* "This is the one screen leadership would see every planning cycle. The badge gives the 30-second read — [X] alerts across capacity, RTO, and other. Click into any category for details. Right now, we can see [X units] are over-provisioned vs. their actual attendance — seats we're paying for that no one uses."
 
 ---
 
@@ -279,9 +281,10 @@ CPG offices are over-allocated using static rules that ignore actual attendance.
 
 3. **Scenario Lab → Run Simulation → Results** *(1:00)*
    - Click **"Run Simulation"**
+   - Point to the **4 metric cards** above the results table (Total Demand, Total Allocated, Net Gap, Units at Risk)
    - Point to the **results table** — highlight units that turned RED or AMBER
    - Point to **Scenario Impact Summary** — read out the seat gap and RTO need changes
-   - *Say:* "Instantly we can see which units are now under-allocated, their gap in seats, and which ones are at risk. The system flags this automatically — no manual checking required."
+   - *Say:* "Instantly we can see the snapshot — [X] units at risk, a net gap of [Y] seats. The results table shows every unit's status. No spreadsheet formula maintenance required."
 
 4. **Scenario Lab → Changes vs. Baseline** *(0:30)*
    - Scroll to the **Changes vs. Baseline** section
@@ -308,9 +311,10 @@ CPG offices are over-allocated using static rules that ignore actual attendance.
 
 2. **Optimization tab → RTO-Based → Run** *(1:00)*
    - Go to **Optimization** tab
+   - Note the **"No scenario constraints active"** caption (or scenario settings if a mandate is set)
    - Select objective: **"RTO-Based (Free Capacity)"**
    - Click **"Run Optimization"**
-   - Point to the **Savings Summary**: seats saved, floors freed
+   - Point to the **Savings Summary**: "Policy-Based Seats (80% Rule)" vs "Attendance-Based Seats" — seats saved and floors freed
    - *Say:* "The optimizer looks at actual attendance patterns and asks: how many seats do we *actually* need? It's allocating by real demand — not the 80% rule. We've just freed [X seats] across [Y floors]."
 
 3. **Optimization → Cost Estimation Panel** *(0:45)*
@@ -360,12 +364,13 @@ CPG offices are over-allocated using static rules that ignore actual attendance.
 |--------|-----|--------|-------------|
 | 0:00 | Admin | Load Sample Data | "Real data from HRIS + badge systems" |
 | 0:15 | Scenario Lab | Run Simulation | "Baseline in one click" |
-| 0:45 | Executive Dashboard | Show KPIs + Alerts | "One screen for leadership" |
+| 0:45 | Executive Dashboard | Show KPIs + alert badge → open RTO Alerts expander | "🔴/🟡/⚠️ badge = 30-second read for leadership" |
 | 2:00 | Scenario Lab | Create Aggressive Growth template | "Scenario in 15 seconds" |
 | 2:30 | Scenario Lab | Exclude a floor, re-run | "Floor offline — instant impact" |
+| 3:00 | Scenario Lab | Show 4 metric cards + results table (RED/AMBER units) | "Snapshot: [N] units at risk, [X] seat gap" |
 | 3:30 | Scenario Lab | Show Changes vs. Baseline | "Before/after, data-backed" |
 | 4:00 | Scenario Lab | Download report | "Board-ready in one click" |
-| 4:30 | Optimization | RTO-Based run | "How many seats do we actually need?" |
+| 4:30 | Optimization | Note scenario settings caption → RTO-Based run | "How many seats do we actually need?" |
 | 5:15 | Optimization | Cost Estimation ($10K/seat) | "[$X million] annual savings" |
 | 6:00 | Optimization | Sensitivity Analysis | "Defensible under any assumption" |
 | 6:45 | Optimization | What-If RTO (3.5 → 4 days) | "Policy change modeled instantly" |

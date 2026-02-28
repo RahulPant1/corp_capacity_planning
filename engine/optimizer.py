@@ -33,8 +33,11 @@ def _build_adjacency_weights(
     same_building (15) > cross_building (0).
     """
     weights = {}
+    available_floor_keys = {(f.building_id, f.tower_id, f.floor_number) for f in floors}
     unit_floors = {}
     for a in baseline_assignments:
+        if (a.building_id, a.tower_id, a.floor_number) not in available_floor_keys:
+            continue
         if a.unit_name not in unit_floors:
             unit_floors[a.unit_name] = set()
         unit_floors[a.unit_name].add((a.building_id, a.tower_id, a.floor_number))

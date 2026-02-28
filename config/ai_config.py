@@ -1,15 +1,29 @@
 """AI configuration — Gemini API integration.
 
 Feature is intentionally hidden: the Executive Dashboard will only show
-the AI Brief expander when GEMINI_API_KEY is set as an environment variable.
-If the key is absent or the API call fails, the feature is silently absent.
+the AI Brief expander when a Gemini API key is available — either entered
+via the Admin tab UI (stored in st.session_state) or set as the
+GEMINI_API_KEY environment variable.  If no key is present or the API call
+fails, the feature is silently absent.
 """
 import os
 
 
+def _get_api_key() -> str:
+    """Return the first available Gemini API key: session state > env var."""
+    try:
+        import streamlit as st
+        key = st.session_state.get("gemini_api_key", "").strip()
+        if key:
+            return key
+    except Exception:
+        pass
+    return os.environ.get("GEMINI_API_KEY", "").strip()
+
+
 def is_ai_enabled() -> bool:
-    """Return True only if a Gemini API key is configured."""
-    return bool(os.environ.get("GEMINI_API_KEY", "").strip())
+    """Return True if any Gemini API key is configured."""
+    return bool(_get_api_key())
 
 
 def generate_executive_brief(scenario_summary: dict) -> str:
@@ -26,7 +40,10 @@ def generate_executive_brief(scenario_summary: dict) -> str:
     """
     try:
         import google.generativeai as genai  # optional dependency
-        genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+        api_key = _get_api_key()
+        if not api_key:
+            return ""
+        genai.configure(api_key=api_key)
         model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(_build_prompt(scenario_summary))
         return response.text.strip()

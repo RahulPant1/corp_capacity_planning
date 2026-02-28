@@ -494,3 +494,32 @@ def render(sidebar_state):
         st.download_button("Export Audit Log (CSV)", csv, "audit_log.csv", "text/csv")
     else:
         st.info("No audit entries yet.")
+
+    # --- AI Configuration (hidden) ---
+    st.divider()
+    with st.expander("🔧 Advanced Settings — AI Configuration", expanded=False):
+        st.caption(
+            "Enter your Gemini API key to enable the AI Executive Brief feature on the "
+            "dashboard. The key is stored for this session only and is never saved to disk."
+        )
+        key_input = st.text_input(
+            "Gemini API Key",
+            value=st.session_state.get("gemini_api_key", ""),
+            type="password",
+            key="admin_gemini_key_input",
+            placeholder="AIza...",
+        )
+        col_save, col_clear = st.columns([1, 1])
+        with col_save:
+            if st.button("Enable AI Feature", key="btn_save_gemini_key"):
+                if key_input.strip():
+                    st.session_state["gemini_api_key"] = key_input.strip()
+                    st.success(
+                        "AI Executive Brief enabled. Switch to Executive Dashboard to use it."
+                    )
+                else:
+                    st.warning("Please enter a valid API key.")
+        with col_clear:
+            if st.button("Clear Key", key="btn_clear_gemini_key"):
+                st.session_state.pop("gemini_api_key", None)
+                st.info("API key cleared. AI feature is now disabled.")

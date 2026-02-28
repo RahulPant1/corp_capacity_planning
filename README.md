@@ -134,11 +134,13 @@ When a Global RTO Mandate is set (e.g., 3.5 days/week), units whose actual RTO i
 Read-only summary for leadership review:
 - **Scenario context caption** — always-visible line showing active scenario name, type, horizon, and last-run time
 - **KPI cards** — effective supply, total demand, seat gap, units with shortfall
+- **Key Insights** — up to 5 rule-based insight cards (🔴 risk / 💡 opportunity / 📊 neutral) surfacing the biggest shortfall, best consolidation opportunity, over-provisioned units, low-utilization floors, and RTO savings potential
 - **Capacity vs Demand chart** by tower + utilization donut
 - **Planning Alerts** with an alert summary badge (`🔴 N Capacity · 🟡 N RTO · ⚠️ N Other`); each category is a collapsible expander:
   - 🔴 **Capacity Alerts** — floor saturation, unit shortfalls
   - 🟡 **RTO Alerts** — allocated vs RTO-based need per unit (chart for all units; table for mismatches)
   - ⚠️ **Other Alerts** — fragmentation, cross-building spread
+- **AI Executive Brief** *(hidden — Gemini API key required)* — collapsed expander at the bottom with a "Generate Brief" button that produces a 3-paragraph plain-English CFO narrative via Gemini 1.5 Flash
 - Stale-data warning when base data has changed since the last simulation
 
 ### Tab 2: Unit Impact View
@@ -192,7 +194,9 @@ After simulation, the Scenario Lab shows:
   - *How is Allocation % calculated?* — expandable formula with step-by-step walkthrough
 - **Scenario Impact Summary** — overall stats, RTO Need explanation, per-unit highlights, key risks
 - **Changes vs Baseline** — automatic comparison with side-by-side table and chart
-- **Download Report** — export an Excel report (allocation, floor assignments, risks, optimization run)
+- **Download Report** — two formats side by side:
+  - **Excel (.xlsx)** — allocation, floor assignments, risks, optimization run
+  - **PDF Boardroom Report (.pdf)** — professional 5-page report with color-coded tables (RED/AMBER/GREEN), KPI summary, floor assignments, risk narrative, and optional optimization results page; ready to email to leadership
 
 ### Tab 5: Optimization & Recommendations
 
@@ -224,6 +228,7 @@ LP-based seat optimization using PuLP. **Run Simulation first** — Optimization
 - **Edit Base Data** — modify floor capacities, unit headcounts, attendance & RTO data, and per-unit seat allocation %
 - **Rule Configuration** — set global allocation %, policy bounds, planning buffer level (Lean / Balanced / Conservative), RTO alert threshold
 - **Audit Trail** — view and export a log of all changes, overrides, and actions
+- **Advanced Settings — AI Configuration** *(hidden, collapsed by default)* — paste a Gemini API key to enable the AI Executive Brief feature for the current session; the key is stored in session memory only and never written to disk
 
 ---
 
@@ -265,17 +270,37 @@ Adjustable in **Admin > Rule Configuration**.
 
 ```
 cpg_planning_tool/
-├── app.py                  # Streamlit entry point
-├── requirements.txt        # Python dependencies
-├── config/defaults.py      # Policy bounds and constants
-├── models/                 # Data models (Floor, Unit, Scenario, etc.)
-├── data/                   # File loader, validator, session store, sample data
-├── engine/                 # Allocation, spatial, scenario, optimizer, explainer, report_generator
-├── tabs/                   # All 6 UI tabs
-├── components/             # Sidebar, charts, metric cards, tables
-├── tests/                  # Unit tests (pytest)
-├── docs/                   # Executive summary and documentation
-└── sample_files/           # Pre-generated CSV and Excel files for testing
+├── app.py                       # Streamlit entry point
+├── requirements.txt             # Python dependencies
+├── config/
+│   ├── defaults.py              # Policy bounds and constants
+│   └── ai_config.py            # Gemini API integration (hidden AI brief feature)
+├── models/                      # Data models (Floor, Unit, Scenario, etc.)
+├── data/                        # File loader, validator, session store, sample data
+├── engine/
+│   ├── ...                      # Allocation, spatial, scenario, optimizer, explainer
+│   └── pdf_report_generator.py  # PDF boardroom report (reportlab)
+├── tabs/                        # All 6 UI tabs
+├── components/                  # Sidebar, charts, metric cards, tables
+├── tests/                       # Unit tests (pytest)
+├── docs/                        # Executive summary and documentation
+└── sample_files/                # Pre-generated CSV and Excel files for testing
+```
+
+### Optional: AI Executive Brief
+
+To enable the Gemini-powered AI narrative on the Executive Dashboard, either:
+
+- **Option A (in-app):** Open the Admin tab → scroll to the bottom → expand "🔧 Advanced Settings — AI Configuration" → paste your Gemini API key → click "Enable AI Feature". The key lives in the session only.
+- **Option B (env var):** Set `GEMINI_API_KEY` in your environment before launching:
+  ```bash
+  export GEMINI_API_KEY=your_key_here
+  streamlit run app.py
+  ```
+
+Install the optional dependency:
+```bash
+pip install google-generativeai
 ```
 
 Run tests with:

@@ -291,35 +291,79 @@ def render(sidebar_state):
     if not has_any:
         st.success("No planning alerts — all metrics within acceptable ranges.")
     else:
-        total_alerts = len(capacity_alerts) + len(rto_alerts_list) + len(other_alerts)
-        if total_alerts > 0:
-            badge_parts = []
-            if capacity_alerts:
-                badge_parts.append(f"🔴 {len(capacity_alerts)} Capacity")
-            if rto_alerts_list:
-                badge_parts.append(f"🟡 {len(rto_alerts_list)} RTO")
-            if other_alerts:
-                badge_parts.append(f"⚠️ {len(other_alerts)} Other")
-            st.markdown(f"**{total_alerts} alert{'s' if total_alerts != 1 else ''}:** " + " · ".join(badge_parts))
+        # --- Alert summary cards (3 columns, color-coded by type) ---
+        cap_count = len(capacity_alerts)
+        rto_count = len(rto_alerts_list)
+        oth_count = len(other_alerts)
 
-        with st.expander(f"🔴 Capacity Alerts ({len(capacity_alerts)})", expanded=len(capacity_alerts) > 0):
-            st.caption("Units or floors where allocated seats fall short of demand.")
+        card_css = (
+            "padding:10px 14px;border-radius:6px;margin-bottom:6px;"
+            "font-family:sans-serif;line-height:1.4;"
+        )
+        cap_bg  = "#FFCCCC" if cap_count  else "#F5F5F5"
+        rto_bg  = "#FFF3CC" if rto_count  else "#F5F5F5"
+        oth_bg  = "#E8E8E8" if oth_count  else "#F5F5F5"
+        cap_bdr = "#CC0000" if cap_count  else "#BBBBBB"
+        rto_bdr = "#BB7700" if rto_count  else "#BBBBBB"
+        oth_bdr = "#666666" if oth_count  else "#BBBBBB"
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(
+                f'<div style="{card_css}background:{cap_bg};border-left:4px solid {cap_bdr};">'
+                f'<span style="font-size:1.25em;font-weight:700;">🔴 {cap_count}</span><br/>'
+                f'<span style="font-size:0.78em;color:#444;">Capacity Alerts</span><br/>'
+                f'<span style="font-size:0.72em;color:#666;">Floor saturation &amp; unit shortfalls</span>'
+                f'</div>', unsafe_allow_html=True)
+        with c2:
+            st.markdown(
+                f'<div style="{card_css}background:{rto_bg};border-left:4px solid {rto_bdr};">'
+                f'<span style="font-size:1.25em;font-weight:700;">🟡 {rto_count}</span><br/>'
+                f'<span style="font-size:0.78em;color:#444;">RTO Alerts</span><br/>'
+                f'<span style="font-size:0.72em;color:#666;">Allocation vs attendance-based need</span>'
+                f'</div>', unsafe_allow_html=True)
+        with c3:
+            st.markdown(
+                f'<div style="{card_css}background:{oth_bg};border-left:4px solid {oth_bdr};">'
+                f'<span style="font-size:1.25em;font-weight:700;">⚠️ {oth_count}</span><br/>'
+                f'<span style="font-size:0.78em;color:#444;">Other Alerts</span><br/>'
+                f'<span style="font-size:0.72em;color:#666;">Fragmentation &amp; cross-building spread</span>'
+                f'</div>', unsafe_allow_html=True)
+
+        st.markdown("<div style='margin-top:10px;'></div>", unsafe_allow_html=True)
+
+        # --- Capacity Alerts expander ---
+        with st.expander(f"🔴 Capacity Alerts ({cap_count})", expanded=cap_count > 0):
+            st.caption(
+                "**What this measures:** seats allocated vs. seats demanded under the policy rule. "
+                "A shortfall means a unit cannot be fully seated at the planned allocation level."
+            )
             if capacity_alerts:
                 st.dataframe(pd.DataFrame(capacity_alerts), use_container_width=True, hide_index=True)
             else:
                 st.info("No capacity alerts.")
 
-        with st.expander(f"🟡 RTO Alerts ({len(rto_alerts_list)})", expanded=len(rto_alerts_list) > 0):
-            st.caption("Allocated vs RTO-based need by unit. Chart shows all units; table shows mismatches only.")
+        # --- RTO Alerts expander ---
+        with st.expander(f"🟡 RTO Alerts ({rto_count})", expanded=rto_count > 0):
+            st.caption(
+                "**What this measures:** allocated seats vs. attendance-based need "
+                "(median HC + peak buffer × RTO days/week). "
+                "Under-utilized = over-provisioned vs. real attendance. "
+                "Under-allocated = attendance need exceeds what was assigned."
+            )
             if rto_all_data:
                 fig = rto_need_vs_allocated_bar(rto_all_data)
                 st.plotly_chart(fig, use_container_width=True)
             if rto_alerts_list:
-                st.warning(f"{len(rto_alerts_list)} unit{'s' if len(rto_alerts_list) != 1 else ''} with allocation mismatch")
+                st.warning(f"{rto_count} unit{'s' if rto_count != 1 else ''} with allocation vs attendance mismatch")
                 st.dataframe(pd.DataFrame(rto_alerts_list), use_container_width=True, hide_index=True)
 
-        with st.expander(f"⚠️ Other Alerts ({len(other_alerts)})", expanded=False):
-            st.caption("Fragmentation and cross-building spread issues.")
+        # --- Other Alerts expander ---
+        with st.expander(f"⚠️ Other Alerts ({oth_count})", expanded=False):
+            st.caption(
+                "**What this measures:** spatial efficiency issues — fragmentation (unit spread "
+                "across too many floors) and cross-building spread (unit split across buildings)."
+            )
             if other_alerts:
                 st.dataframe(pd.DataFrame(other_alerts), use_container_width=True, hide_index=True)
             else:

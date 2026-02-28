@@ -89,7 +89,7 @@ def _header_table(title: str, scenario_name: str, report_date: str, styles):
 def _kpi_table(supply, demand, gap, at_risk, styles):
     _, _, _, _, _, kpi_val, kpi_lbl = styles
     gap_color = colors.HexColor("#006400") if gap >= 0 else colors.HexColor("#8B0000")
-    kpi_val_gap = ParagraphStyle("rkpivg", parent=kpi_val._baseFontName and kpi_val or kpi_val,
+    kpi_val_gap = ParagraphStyle("rkpivg", parent=kpi_val,
                                   fontSize=20, leading=24, fontName="Helvetica-Bold",
                                   textColor=gap_color, alignment=1)
 

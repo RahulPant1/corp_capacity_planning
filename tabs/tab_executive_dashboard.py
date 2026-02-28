@@ -15,6 +15,107 @@ from engine.scenario_engine import apply_floor_modifications, apply_overrides
 from config.defaults import FLOOR_SATURATION_THRESHOLD, UNIT_SHORTFALL_THRESHOLD
 
 
+def _generate_insights(allocs, floors, rto_alert_map, scenario, rule_config):
+    """Return a list of rule-based insight dicts with keys 'type' and 'text'.
+    Types: 'risk' | 'opportunity' | 'neutral'
+    """
+    insights = []
+
+    # 1. Most critical seat shortfall
+    shortfalls = [(a.unit_name, a.seat_gap) for a in allocs if a.seat_gap < 0]
+    if shortfalls:
+        worst = min(shortfalls, key=lambda x: x[1])
+        insights.append({
+            "type": "risk",
+            "text": (f"**{worst[0]}** has the largest seat shortfall: **{worst[1]:+d} seats**. "
+                     "Run Optimization → RTO-Based to reclaim unused supply."),
+        })
+
+    # 2. Best consolidation opportunity (highest fragmentation > 0.5)
+    frag_units = [(a.unit_name, a.fragmentation_score)
+                  for a in allocs if a.fragmentation_score > 0.5]
+    if frag_units:
+        top_frag = max(frag_units, key=lambda x: x[1])
+        insights.append({
+            "type": "opportunity",
+            "text": (f"**{top_frag[0]}** is spread across multiple floors "
+                     f"(fragmentation score **{top_frag[1]:.2f}**). "
+                     "Consolidating to fewer floors could free real estate."),
+        })
+
+    # 3. Most over-provisioned unit vs RTO need
+    over = []
+    for a in allocs:
+        ra = rto_alert_map.get(a.unit_name)
+        if ra and a.allocated_seats > ra["expected_seats"]:
+            excess = a.allocated_seats - ra["expected_seats"]
+            over.append((a.unit_name, excess, ra["expected_seats"]))
+    if over:
+        top_over = max(over, key=lambda x: x[1])
+        insights.append({
+            "type": "opportunity",
+            "text": (f"**{top_over[0]}** is over-provisioned by **{top_over[1]:+d} seats** "
+                     f"vs attendance need (RTO need: {top_over[2]} seats). "
+                     "Reallocating this surplus could resolve a shortfall elsewhere."),
+        })
+
+    # 4. Floors below 40% utilization
+    low_util = [f for f in floors
+                if f.total_seats > 0
+                and hasattr(f, "assigned_seats")
+                and 0 < f.assigned_seats / f.total_seats < 0.40]
+    if low_util:
+        insights.append({
+            "type": "opportunity",
+            "text": (f"**{len(low_util)} floor(s)** are below 40% utilization. "
+                     "Consolidating occupants onto fewer floors could free entire floors for sublease."),
+        })
+
+    # 5. Potential saving from RTO-based optimization
+    total_alloc = sum(a.allocated_seats for a in allocs)
+    total_rto_need = sum(rto_alert_map[a.unit_name]["expected_seats"]
+                         for a in allocs if a.unit_name in rto_alert_map)
+    potential_saving = total_alloc - total_rto_need
+    if potential_saving > 0 and total_alloc > 0:
+        insights.append({
+            "type": "neutral",
+            "text": (f"RTO-Based Optimization could reduce seat demand by up to "
+                     f"**{potential_saving:,} seats** "
+                     f"(**{potential_saving / total_alloc:.0%}** of current allocation). "
+                     "Run the Optimization tab to see floor-level savings."),
+        })
+
+    return insights
+
+
+def _render_key_insights(allocs, floors, scenario, rule_config):
+    """Render the Key Insights strip on the Executive Dashboard."""
+    from engine.allocation_engine import compute_rto_alerts
+    from engine.scenario_engine import apply_overrides
+    from data.session_store import get_units, get_attendance
+
+    units = get_units()
+    att_profiles = get_attendance()
+    att_map = {a.unit_name: a for a in att_profiles}
+    _, scenario_att_map = apply_overrides(units, att_map, scenario)
+    rto_data = compute_rto_alerts(allocs, units, scenario_att_map, rule_config)
+    rto_alert_map = {ra["unit_name"]: ra for ra in rto_data}
+
+    insights = _generate_insights(allocs, floors, rto_alert_map, scenario, rule_config)
+    if not insights:
+        return
+
+    st.subheader("Key Insights")
+    for ins in insights:
+        if ins["type"] == "risk":
+            st.warning(f"🔴 {ins['text']}")
+        elif ins["type"] == "opportunity":
+            st.info(f"💡 {ins['text']}")
+        else:
+            st.success(f"📊 {ins['text']}")
+    st.divider()
+
+
 def render(sidebar_state):
     """Render the Executive Dashboard tab."""
     st.header("Executive Dashboard")
@@ -86,6 +187,9 @@ def render(sidebar_state):
                 f"Effective supply is {effective_total_seats:,} seats (base: {raw_total_seats:,}).")
 
     st.divider()
+
+    # --- Key Insights (rule-based, auto-generated from allocation data) ---
+    _render_key_insights(allocations, floors, scenario, get_rule_config())
 
     # --- Charts ---
     col1, col2 = st.columns([3, 2])
@@ -220,3 +324,66 @@ def render(sidebar_state):
                 st.dataframe(pd.DataFrame(other_alerts), use_container_width=True, hide_index=True)
             else:
                 st.info("No other alerts.")
+
+    # --- AI Executive Brief (hidden; only visible when GEMINI_API_KEY is set) ---
+    from config.ai_config import is_ai_enabled, generate_executive_brief
+    if is_ai_enabled():
+        st.divider()
+        with st.expander("AI Executive Brief (Gemini)", expanded=False):
+            st.caption(
+                "Auto-generated plain-English summary of this scenario for leadership. "
+                "Powered by Google Gemini."
+            )
+            if st.button("Generate Brief", key="btn_ai_brief"):
+                # Build the context summary for the AI prompt
+                rto_need_total = sum(
+                    ra["expected_seats"] for ra in rto_all_data
+                ) if "rto_all_data" in dir() else 0
+                potential_saving = max(0, total_allocated - rto_need_total)
+
+                shortfalls = [(a.unit_name, a.seat_gap) for a in allocations if a.seat_gap < 0]
+                top_risk_unit = min(shortfalls, key=lambda x: x[1]) if shortfalls else ("N/A", 0)
+
+                over_prov = [
+                    (ra["unit_name"], allocations[0].allocated_seats - ra["expected_seats"])
+                    for ra in rto_all_data
+                    if ra["status"] == "Under-utilized"
+                ] if "rto_all_data" in dir() else []
+                top_opp = (max(over_prov, key=lambda x: x[1])[0]
+                           if over_prov else "No significant over-provisioning detected")
+
+                red_count = sum(
+                    1 for a in allocations
+                    if (a.seat_gap / a.effective_demand_seats
+                        if a.effective_demand_seats else 0) < -0.10
+                    or a.fragmentation_score > 0.8
+                )
+                amber_count = sum(
+                    1 for a in allocations
+                    if (a.seat_gap / a.effective_demand_seats
+                        if a.effective_demand_seats else 0) < -0.05
+                    or a.fragmentation_score > 0.5
+                ) - red_count
+
+                summary = {
+                    "scenario_name":   scenario.name,
+                    "scenario_type":   scenario.scenario_type,
+                    "horizon":         scenario.planning_horizon_months,
+                    "total_supply":    effective_total_seats,
+                    "total_demand":    total_demand,
+                    "net_gap":         seat_gap,
+                    "units_at_risk":   impacted_units,
+                    "red_count":       max(0, red_count),
+                    "amber_count":     max(0, amber_count),
+                    "total_rto_need":  rto_need_total,
+                    "potential_saving": potential_saving,
+                    "top_risk_unit":   top_risk_unit[0],
+                    "top_risk_gap":    top_risk_unit[1],
+                    "top_opportunity": top_opp,
+                }
+                with st.spinner("Generating executive brief via Gemini..."):
+                    brief = generate_executive_brief(summary)
+                if brief:
+                    st.markdown(brief)
+                else:
+                    st.warning("Could not generate brief. Check the GEMINI_API_KEY or try again.")

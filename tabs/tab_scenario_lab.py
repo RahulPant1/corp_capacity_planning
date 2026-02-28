@@ -573,3 +573,22 @@ def render(sidebar_state):
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="btn_download_report",
             )
+
+            # PDF boardroom report
+            from engine.pdf_report_generator import generate_pdf_report
+            pdf_bytes = generate_pdf_report(
+                scenario=scenario,
+                floors=floors,
+                units=units,
+                attendance_map={a.unit_name: a for a in attendance_profiles},
+                rule_config=get_rule_config(),
+                opt_history=opt_history if opt_history else None,
+            )
+            pdf_name = f"scenario_{scenario.name.replace(' ', '_')}_{date.today()}.pdf"
+            st.download_button(
+                label="Download Boardroom Report (.pdf)",
+                data=pdf_bytes,
+                file_name=pdf_name,
+                mime="application/pdf",
+                key="btn_download_pdf",
+            )

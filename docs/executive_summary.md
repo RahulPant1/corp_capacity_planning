@@ -86,6 +86,82 @@ Every scenario shows:
 - Risk alerts (shortfalls, fragmentation, RTO non-compliance)
 - Automatic comparison vs. baseline
 
+---
+
+### Scenario Planning vs. Optimization — How They Work Together
+
+These are two distinct capabilities that answer two different questions. They are designed to run in sequence.
+
+#### Scenario Planning (Scenario Lab tab) — *"How many seats does each unit need?"*
+
+Scenario Planning is about **modelling demand**. It takes your business assumptions as inputs and computes how many seats every unit should receive.
+
+**What you control:**
+- Growth or attrition rates per unit (e.g., Engineering +15%, Finance -10%)
+- Excluded floors (renovation, sublease, capacity reduction)
+- Global RTO mandate (e.g., 3 days/week company-wide)
+- Per-unit allocation % overrides (e.g., Sales gets 90% instead of the 80% default)
+
+**What it produces:**
+- A seat allocation number for every unit (how many seats they receive)
+- Gap analysis: which units have shortfalls vs. surpluses vs. the policy rule
+- Risk flags: RED (shortfall), AMBER (over-provisioned or RTO mismatch), GREEN (healthy)
+
+> **Analogy:** Scenario Planning is like a budget exercise. It answers "based on our plan, how much space do we need per team?"
+
+---
+
+#### Optimization (Optimization tab) — *"Where exactly do those seats go on which floors?"*
+
+Optimization is about **physical placement**. It takes the seat demands calculated by Scenario Planning and uses a Linear Programming (LP) solver to assign each unit to specific floors in specific buildings and towers.
+
+**What it controls:**
+- Which floor(s) each unit occupies
+- How many seats on each floor are assigned to each unit
+- Objective: minimize the number of floors used while maximizing team cohesion
+
+**Three optimization objectives:**
+| Objective | What it does | Use case |
+|-----------|-------------|----------|
+| **Optimal Placement** | Places units on the fewest floors using the policy-rule seat counts | Baseline floor plan; governance |
+| **RTO-Based** | Recalculates seat counts from real attendance data, then re-places units | Find real estate savings |
+| **What-If RTO** | Simulates a new RTO policy (e.g., 4 days/week) and re-places | Policy change impact modeling |
+
+**What it produces:**
+- A unit-to-floor assignment table (unit → building → tower → floor → seats)
+- Seats saved and floors freed vs. the policy-based plan
+- Dollar savings estimate (if cost/seat entered)
+- Sensitivity range across Lean/Balanced/Conservative planning assumptions
+
+> **Analogy:** Optimization is like a logistics exercise. Given the budget (seats per team), it figures out the most efficient physical layout.
+
+---
+
+#### The Workflow: How They Connect
+
+```
+Step 1 — Scenario Lab                Step 2 — Optimization Tab
+────────────────────────             ──────────────────────────
+Set business assumptions    ──────►  Run LP solver on seat demands
+Run Simulation                       Choose objective (Placement / RTO / What-If)
+↓                                    ↓
+Seat allocation per unit             Floor-by-floor unit assignment
+(how many seats each unit gets)      (where each unit physically sits)
+                                     ↓
+                            Step 3 — Accept & Apply
+                            ──────────────────────────
+                            Push optimized floor plan back to the scenario
+                            Visible in Dashboard, Spatial View, Unit Impact
+```
+
+**Key distinction:**
+- You can run Scenario Planning without ever running Optimization (to see demand impacts only)
+- Optimization always reads from the most recent Simulation run — run Simulation first
+- Accepting an optimization result updates the scenario; it does not delete the original plan
+- Multiple optimization runs can be compared in the Optimization History before committing
+
+---
+
 ### Data Required
 
 | Data Source | Examples | Refresh Frequency |

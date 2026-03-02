@@ -207,16 +207,23 @@ LP-based seat optimization using PuLP. **Run Simulation first** — Optimization
 - **RTO-Based** — allocate by actual attendance patterns, free unused capacity. Shows seats saved and floors freed.
 - **What-If RTO** — simulate a different RTO policy (slider: 1-5 days/week)
 
+**Placement preference (all objectives):** The optimizer strongly prefers to keep each unit consolidated:
+1. **Same floor** (best) — unit stays on a single floor
+2. **Adjacent floors** — when spreading across 2+ floors, consecutive floors within the same tower are preferred over non-consecutive (e.g., floors 3 & 4 over floors 1 & 4)
+3. **Same tower** — before spreading to another tower
+4. **Same building** — before crossing to another building
+5. **Cross-building** — only when a single building genuinely lacks capacity; flagged with a warning in results
+
 **Scenario Settings in Effect** *(expander)* — shows active scenario-level constraints (RTO mandate, excluded floors, floor capacity) before running.
 
 **Runtime Constraints (Optional)** *(expander)* — applied at run time on top of the objective:
-- **Max Floors Per Unit** — cap how many floors any unit can spread across (e.g., max 2 floors)
+- **Max Floors Per Unit** — cap how many floors any unit can spread across (e.g., max 2 floors); adjacent floors are always preferred within that budget
 - **Pin Units to Tower** — restrict specific units to a tower (e.g., Engineering stays in B1-T1)
 - **Minimum Seats Guarantee** — ensure every unit gets at least X% of their demand even under scarcity
 
 **Results include:**
 - **Policy-Based Seats (80% Rule)** vs **Attendance-Based Seats** summary metrics (RTO objectives)
-- Before/after seat and floor count comparison per unit
+- Before/after seat and floor count comparison per unit; cross-building splits flagged with a warning
 - **Cost Estimation Panel** — enter $ per seat/year to see annual cost and savings in dollars
 - **Optimization History** — last 3 runs stored for comparison (objective, seats, floors used)
 - **Sensitivity Analysis** — auto-runs Lean/Balanced/Conservative buffer presets and shows seat demand range

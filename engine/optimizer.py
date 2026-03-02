@@ -105,6 +105,14 @@ def optimize_allocation(
     floor_ids = [f.floor_id for f in available_floors]
     floor_map = {f.floor_id: f for f in available_floors}
     alloc_map = {a.unit_name: a for a in allocations}
+
+    # Precompute adjacent floor pairs within the same tower
+    adjacent_pairs = [
+        (f1.floor_id, f2.floor_id)
+        for i, f1 in enumerate(available_floors)
+        for f2 in available_floors[i + 1:]
+        if f1.tower_id == f2.tower_id and abs(f1.floor_number - f2.floor_number) == 1
+    ]
     unit_map = {u.unit_name: u for u in (units or [])}
     att_map = attendance_map or {}
 
@@ -148,6 +156,14 @@ def optimize_allocation(
                 if floor_map[fid].building_id == bid:
                     prob += b_use[(u, bid)] >= y[(u, fid)], f"blink_{u}_{bid}_{fid}"
 
+    # Adjacent floor-pair binary variables: adj[u,f1,f2] = 1 when unit u uses both adjacent floors
+    adj = {}
+    for u in unit_names:
+        for fid1, fid2 in adjacent_pairs:
+            adj[(u, fid1, fid2)] = pulp.LpVariable(f"adj_{u}_{fid1}_{fid2}", cat="Binary")
+            prob += adj[(u, fid1, fid2)] <= y[(u, fid1)], f"adjlink1_{u}_{fid1}_{fid2}"
+            prob += adj[(u, fid1, fid2)] <= y[(u, fid2)], f"adjlink2_{u}_{fid1}_{fid2}"
+
     # Adjacency weights (cohesion tiebreaker)
     weights = _build_adjacency_weights(available_floors, baseline_assignments)
     cohesion_term = pulp.lpSum(
@@ -157,8 +173,9 @@ def optimize_allocation(
     COHESION_WEIGHT = 0.001
     FLOOR_WEIGHT = 1.0
     BUILDING_WEIGHT = 5.0  # Cross-building split costs 5× a floor — strongly prefer same building
+    ADJACENT_FLOOR_REWARD = 3.0  # Reward per adjacent floor pair used by same unit in same tower
 
-    # Objective: minimize floors + building spread + cohesion tiebreaker
+    # Objective: minimize floors + building spread + cohesion tiebreaker, reward adjacent pairs
     # Shortfall slack for when demand exceeds capacity
     s = {}
     for u in unit_names:
@@ -168,11 +185,16 @@ def optimize_allocation(
         ), f"shortfall_{u}"
 
     SHORTFALL_WEIGHT = 100.0  # High priority: meet demand first
+    adj_term = pulp.lpSum(
+        adj[(u, fid1, fid2)]
+        for u in unit_names for fid1, fid2 in adjacent_pairs
+    )
     prob += (
-        SHORTFALL_WEIGHT * pulp.lpSum(s[u] for u in unit_names)
-        + FLOOR_WEIGHT     * pulp.lpSum(y[(u, fid)] for u in unit_names for fid in floor_ids)
-        + BUILDING_WEIGHT  * pulp.lpSum(b_use[(u, bid)] for u in unit_names for bid in building_ids)
-        - COHESION_WEIGHT  * cohesion_term
+        SHORTFALL_WEIGHT      * pulp.lpSum(s[u] for u in unit_names)
+        + FLOOR_WEIGHT        * pulp.lpSum(y[(u, fid)] for u in unit_names for fid in floor_ids)
+        + BUILDING_WEIGHT     * pulp.lpSum(b_use[(u, bid)] for u in unit_names for bid in building_ids)
+        - ADJACENT_FLOOR_REWARD * adj_term
+        - COHESION_WEIGHT     * cohesion_term
     ), "combined_objective"
 
     # --- Constraints ---

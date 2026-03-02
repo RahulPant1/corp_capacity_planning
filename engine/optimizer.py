@@ -137,6 +137,17 @@ def optimize_allocation(
             # Link: if x > 0 then y = 1
             prob += x[(u, fid)] <= floor_map[fid].total_seats * y[(u, fid)], f"link_{u}_{fid}"
 
+    # Building-usage binary variables: penalise cross-building splits per unit
+    building_ids = list({f.building_id for f in available_floors})
+    b_use = {}
+    for u in unit_names:
+        for bid in building_ids:
+            b_use[(u, bid)] = pulp.LpVariable(f"b_{u}_{bid}", cat="Binary")
+            # b_use = 1 if unit u places any seats in building bid
+            for fid in floor_ids:
+                if floor_map[fid].building_id == bid:
+                    prob += b_use[(u, bid)] >= y[(u, fid)], f"blink_{u}_{bid}_{fid}"
+
     # Adjacency weights (cohesion tiebreaker)
     weights = _build_adjacency_weights(available_floors, baseline_assignments)
     cohesion_term = pulp.lpSum(
@@ -145,8 +156,9 @@ def optimize_allocation(
     )
     COHESION_WEIGHT = 0.001
     FLOOR_WEIGHT = 1.0
+    BUILDING_WEIGHT = 5.0  # Cross-building split costs 5× a floor — strongly prefer same building
 
-    # Objective: minimize floors used + cohesion tiebreaker (all objectives share this)
+    # Objective: minimize floors + building spread + cohesion tiebreaker
     # Shortfall slack for when demand exceeds capacity
     s = {}
     for u in unit_names:
@@ -158,8 +170,9 @@ def optimize_allocation(
     SHORTFALL_WEIGHT = 100.0  # High priority: meet demand first
     prob += (
         SHORTFALL_WEIGHT * pulp.lpSum(s[u] for u in unit_names)
-        + FLOOR_WEIGHT * pulp.lpSum(y[(u, fid)] for u in unit_names for fid in floor_ids)
-        - COHESION_WEIGHT * cohesion_term
+        + FLOOR_WEIGHT     * pulp.lpSum(y[(u, fid)] for u in unit_names for fid in floor_ids)
+        + BUILDING_WEIGHT  * pulp.lpSum(b_use[(u, bid)] for u in unit_names for bid in building_ids)
+        - COHESION_WEIGHT  * cohesion_term
     ), "combined_objective"
 
     # --- Constraints ---
@@ -255,6 +268,12 @@ def optimize_allocation(
             new_floor_count[a.unit_name] = set()
         new_floor_count[a.unit_name].add((a.tower_id, a.floor_number))
 
+    new_bldg_count = {}
+    for a in new_assignments:
+        if a.unit_name not in new_bldg_count:
+            new_bldg_count[a.unit_name] = set()
+        new_bldg_count[a.unit_name].add(a.building_id)
+
     before_after = []
     for u in unit_names:
         before_seats = old_totals.get(u, 0)
@@ -270,6 +289,7 @@ def optimize_allocation(
             "Before Floors": before_floors,
             "After Floors": after_floors,
             "Floor Change": after_floors - before_floors,
+            "Buildings After": len(new_bldg_count.get(u, set())),
         })
 
     # Consolidation suggestions

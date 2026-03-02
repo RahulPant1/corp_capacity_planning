@@ -84,6 +84,12 @@ def render(sidebar_state):
             key="opt_rto_target",
         )
 
+    st.caption(
+        "**Placement preference (all objectives):** The optimizer keeps each unit as consolidated "
+        "as possible — strongly preferring same building, then same tower, then adjacent floors. "
+        "Cross-building placement only occurs when a single building genuinely lacks capacity."
+    )
+
     # --- Active Constraints (from scenario) ---
     with st.expander("Scenario Settings in Effect", expanded=False):
         if len(effective_floors) < len(raw_floors) or effective_total < raw_total:
@@ -283,6 +289,20 @@ def render(sidebar_state):
         if result.before_after:
             ba_df = pd.DataFrame(result.before_after)
             render_comparison_table(ba_df)
+
+            # Warn if any unit ended up placed across multiple buildings
+            cross_bldg_units = [
+                row["Unit"] for row in result.before_after
+                if row.get("Buildings After", 1) > 1
+            ]
+            if cross_bldg_units:
+                st.warning(
+                    f"⚠️ **Cross-building placement:** {', '.join(cross_bldg_units)} "
+                    f"{'are' if len(cross_bldg_units) > 1 else 'is'} split across buildings. "
+                    "This happens when a single building lacks sufficient capacity. "
+                    "To consolidate: increase Max Floors Per Unit, remove tower pins, "
+                    "or check if excluded floors are limiting available supply."
+                )
 
             total_before = sum(r["Before Seats"] for r in result.before_after)
             total_after = sum(r["After Seats"] for r in result.before_after)

@@ -359,7 +359,15 @@ def generate_pdf_report(scenario, floors, units, attendance_map,
     story.append(Spacer(1, 0.2 * cm))
 
     unit_map = {u.unit_name: u for u in units}
-    alloc_header = ["Unit", "Priority", "Policy Demand", "Allocated", "Gap", "Alloc %", "Risk"]
+    has_shifts = any(a.hot_seat_savings > 0 for a in allocs)
+
+    if has_shifts:
+        alloc_header = ["Unit", "Priority", "Demand", "Night HC", "Physical", "Saved", "Allocated", "Gap", "Risk"]
+        alloc_col_widths = ["18%", "10%", "10%", "10%", "10%", "9%", "11%", "10%", "12%"]
+    else:
+        alloc_header = ["Unit", "Priority", "Policy Demand", "Allocated", "Gap", "Alloc %", "Risk"]
+        alloc_col_widths = ["28%", "12%", "13%", "13%", "10%", "12%", "12%"]
+
     alloc_data = []
     alloc_levels = []
     for a in allocs:
@@ -367,22 +375,43 @@ def generate_pdf_report(scenario, floors, units, attendance_map,
         gap_pct = a.seat_gap / a.effective_demand_seats if a.effective_demand_seats else 0
         level = _risk_level(gap_pct, a.fragmentation_score)
         alloc_levels.append(level)
-        alloc_data.append([
-            a.unit_name,
-            (u.business_priority or "—") if u else "—",
-            str(a.effective_demand_seats),
-            str(a.allocated_seats),
-            f"{a.seat_gap:+d}",
-            f"{a.recommended_alloc_pct:.1%}",
-            level,
-        ])
+        if has_shifts:
+            night_hc = str(a.night_demand) if a.night_demand > 0 else "—"
+            alloc_data.append([
+                a.unit_name,
+                (u.business_priority or "—") if u else "—",
+                str(a.effective_demand_seats),
+                night_hc,
+                str(a.physical_demand),
+                str(a.hot_seat_savings) if a.hot_seat_savings > 0 else "—",
+                str(a.allocated_seats),
+                f"{a.seat_gap:+d}",
+                level,
+            ])
+        else:
+            alloc_data.append([
+                a.unit_name,
+                (u.business_priority or "—") if u else "—",
+                str(a.effective_demand_seats),
+                str(a.allocated_seats),
+                f"{a.seat_gap:+d}",
+                f"{a.recommended_alloc_pct:.1%}",
+                level,
+            ])
 
     def alloc_row_bg(i, _row):
         return _risk_bg(alloc_levels[i])
 
+    if has_shifts:
+        story.append(Paragraph(
+            "Night HC = night-shift seat demand. Physical = max(Day, Night) after hot-seating. "
+            "Saved = seats freed via desk sharing.",
+            caption))
+        story.append(Spacer(1, 0.15 * cm))
+
     story.append(_std_table(
         alloc_header, alloc_data,
-        ["28%", "12%", "13%", "13%", "10%", "12%", "12%"],
+        alloc_col_widths,
         alloc_row_bg,
     ))
 

@@ -1,6 +1,6 @@
 """Smart Unit Co-location Scoring — pairwise similarity analysis."""
 
-from typing import Dict, List, Optional
+from typing import Dict, List
 from collections import defaultdict
 import numpy as np
 
@@ -24,6 +24,60 @@ def _normalize_array(arr: np.ndarray) -> np.ndarray:
     return (arr - mn) / (mx - mn)
 
 
+def _build_reasoning(
+    unit_a: Unit,
+    unit_b: Unit,
+    sizes: np.ndarray,
+    growths: np.ndarray,
+    shifts: np.ndarray,
+    rto_days: np.ndarray,
+    i: int,
+    j: int,
+    dim_scores: dict,
+    discriminating: list,
+) -> str:
+    """Build human-readable reasoning using actual values.
+
+    Only references dimensions that have real variance across all units
+    (i.e., are discriminating). Shows actual numbers, not normalized %.
+    """
+    dim_labels = {
+        "size": "team size", "growth": "growth rate",
+        "shift": "shift pattern", "rto": "RTO frequency",
+        "priority": "priority",
+    }
+    actual = {
+        "size": f"{int(sizes[i]):,} vs {int(sizes[j]):,} HC",
+        "growth": f"{growths[i]:.0%} vs {growths[j]:.0%} growth",
+        "shift": f"{shifts[i]:.0%} vs {shifts[j]:.0%} night shift",
+        "rto": f"{rto_days[i]:.1f} vs {rto_days[j]:.1f} RTO days/wk",
+        "priority": (
+            f"{unit_a.business_priority or 'None'} vs "
+            f"{unit_b.business_priority or 'None'} priority"
+        ),
+    }
+
+    if not discriminating:
+        return "All planning dimensions are identical — fully compatible pair."
+
+    disc_scores = {k: dim_scores[k] for k in discriminating}
+    best = max(disc_scores, key=disc_scores.get)
+    worst = min(disc_scores, key=disc_scores.get)
+
+    parts = []
+    if disc_scores[best] >= 0.75:
+        parts.append(f"Well-matched on {dim_labels[best]} ({actual[best]})")
+    else:
+        parts.append(f"Moderate match on {dim_labels[best]} ({actual[best]})")
+
+    if worst != best and disc_scores[worst] < 0.70:
+        parts.append(f"notable gap on {dim_labels[worst]} ({actual[worst]})")
+    elif worst != best:
+        parts.append(f"minor gap on {dim_labels[worst]} ({actual[worst]})")
+
+    return "; ".join(parts) + "."
+
+
 def compute_colocation_scores(
     units: List[Unit],
     attendance_map: Dict[str, AttendanceProfile],
@@ -33,7 +87,7 @@ def compute_colocation_scores(
 
     Returns list of dicts sorted by score descending:
         unit_a, unit_b, score (0-1, higher = better match),
-        dimensions (per-dimension similarities), reasoning
+        dimensions (per-dimension similarities), reasoning (with actual values)
     """
     if len(units) < 2:
         return []
@@ -49,6 +103,7 @@ def compute_colocation_scores(
     n = len(units)
     names = [u.unit_name for u in units]
 
+    # Raw feature arrays
     sizes = np.array([float(u.current_total_hc) for u in units])
     growths = np.array([u.hc_growth_pct for u in units])
     shifts = np.array([u.night_shift_pct for u in units])
@@ -59,17 +114,21 @@ def compute_colocation_scores(
     ])
     priorities = np.array([_PRIORITY_MAP.get(u.business_priority, 0.25) for u in units])
 
+    # Normalized arrays (used for scoring)
     norm_sizes = _normalize_array(sizes)
     norm_growths = _normalize_array(growths)
     norm_shifts = _normalize_array(shifts)
     norm_rto = _normalize_array(rto_days)
     norm_prio = _normalize_array(priorities)
 
-    dim_labels = {
-        "size": "team size", "growth": "growth trajectory",
-        "shift": "shift pattern", "rto": "RTO frequency",
-        "priority": "business priority",
-    }
+    # Dimensions with actual variance across units (informative for reasoning)
+    discriminating = [
+        k for k, arr in [
+            ("size", sizes), ("growth", growths), ("shift", shifts),
+            ("rto", rto_days), ("priority", priorities),
+        ]
+        if arr.max() - arr.min() > 1e-9
+    ]
 
     pairs = []
     for i in range(n):
@@ -84,13 +143,10 @@ def compute_colocation_scores(
 
             score = sum(w[k] * dim_scores[k] for k in w)
 
-            best_dim = max(dim_scores, key=dim_scores.get)
-            worst_dim = min(dim_scores, key=dim_scores.get)
-            reasoning = (
-                f"Strong match on {dim_labels[best_dim]} "
-                f"({dim_scores[best_dim]:.0%} similar). "
-                f"Weakest on {dim_labels[worst_dim]} "
-                f"({dim_scores[worst_dim]:.0%} similar)."
+            reasoning = _build_reasoning(
+                units[i], units[j],
+                sizes, growths, shifts, rto_days,
+                i, j, dim_scores, discriminating,
             )
 
             pairs.append({

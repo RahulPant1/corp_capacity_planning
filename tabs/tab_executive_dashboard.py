@@ -216,11 +216,11 @@ def render(sidebar_state):
             tower_summary[tid]["used_seats"] += fu["used_seats"]
 
         fig = capacity_vs_demand_bar(list(tower_summary.values()))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="exec_capacity_bar")
 
     with col2:
         fig = utilization_donut(total_allocated, effective_total_seats)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="exec_utilization_donut")
 
     st.divider()
 
@@ -378,7 +378,7 @@ def render(sidebar_state):
             )
             if rto_all_data:
                 fig = rto_need_vs_allocated_bar(rto_all_data)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="exec_rto_bar")
             if rto_alerts_list:
                 st.warning(f"{rto_count} unit{'s' if rto_count != 1 else ''} with allocation vs attendance mismatch")
                 st.dataframe(pd.DataFrame(rto_alerts_list), use_container_width=True, hide_index=True)

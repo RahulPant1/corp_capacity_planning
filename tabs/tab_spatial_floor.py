@@ -78,7 +78,7 @@ def render(sidebar_state):
 
         with col1:
             fig = floor_heatmap(floor_util, tower_filter)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="spatial_floor_heatmap")
 
         with col2:
             # Summary stats
@@ -120,7 +120,7 @@ def render(sidebar_state):
 
         if assignment_dicts and floor_ids and unit_names:
             fig = unit_floor_heatmap(assignment_dicts, floor_ids, unit_names)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="spatial_unit_heatmap")
 
     st.divider()
 
@@ -208,7 +208,7 @@ def render(sidebar_state):
 
             if scores:
                 fig = colocation_heatmap(scores)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="spatial_coloc_heatmap")
 
                 st.markdown("**Top Co-location Pairs:**")
                 pair_rows = []

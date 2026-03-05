@@ -554,7 +554,7 @@ def render(sidebar_state):
 
                 render_comparison_table(diff_df)
                 fig = scenario_comparison_bar(diff_df)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="scenlab_comparison_bar")
 
         # --- Download Report ---
         st.divider()

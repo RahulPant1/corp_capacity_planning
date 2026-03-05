@@ -502,7 +502,7 @@ def render(sidebar_state):
             coloc_scores = compute_colocation_scores(units, att_map_coloc)
             if coloc_scores:
                 fig_coloc = colocation_heatmap(coloc_scores)
-                st.plotly_chart(fig_coloc, use_container_width=True)
+                st.plotly_chart(fig_coloc, use_container_width=True, key="whatif_coloc_heatmap")
 
                 st.markdown("**Top Co-location Pairs:**")
                 pair_rows = [

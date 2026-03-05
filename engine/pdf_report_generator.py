@@ -653,5 +653,89 @@ def generate_pdf_report(scenario, floors, units, attendance_map,
             story.append(_std_table(ba_header, ba_data,
                                     ["40%", "20%", "20%", "20%"]))
 
+    # ── PAGE: CO-LOCATION SUGGESTIONS ──────────────────────────────────────────
+    try:
+        from engine.colocation import (
+            compute_colocation_scores, get_current_colocations,
+            flag_colocation_mismatches,
+        )
+
+        coloc_scores = compute_colocation_scores(units, attendance_map)
+        if coloc_scores:
+            story.append(PageBreak())
+            story.append(_header_table("CPG Seat Planning Report",
+                                       scenario.name, report_date, styles))
+            story.extend(_section_header("Co-location Suggestions", styles))
+            story.append(Paragraph(
+                "Units ranked by co-location affinity (higher score = better floor-sharing fit). "
+                "Based on similarity in team size, growth rate, shift pattern, RTO frequency, "
+                "and priority.",
+                caption))
+            story.append(Spacer(1, 0.2 * cm))
+
+            coloc_header = ["Unit A", "Unit B", "Score", "Reasoning"]
+            coloc_data = []
+            for s in coloc_scores[:10]:
+                coloc_data.append([
+                    s["unit_a"], s["unit_b"],
+                    f"{s['score']:.0%}", s["reasoning"],
+                ])
+            story.append(_std_table(coloc_header, coloc_data,
+                                    ["18%", "18%", "10%", "54%"]))
+
+            if assignments:
+                current_colocs = get_current_colocations(assignments)
+                mismatches = flag_colocation_mismatches(current_colocs, coloc_scores)
+                if mismatches:
+                    story.append(Spacer(1, 0.3 * cm))
+                    story.extend(_section_header("Co-location Mismatches", styles))
+                    mm_header = ["Floor", "Unit A", "Unit B", "Score", "Issue"]
+                    mm_data = [[m["floor_id"], m["unit_a"], m["unit_b"],
+                                f"{m['score']:.0%}", m["flag_reason"]]
+                               for m in mismatches]
+                    story.append(_std_table(mm_header, mm_data,
+                                           ["14%", "16%", "16%", "10%", "44%"]))
+    except Exception:
+        pass  # Graceful degradation
+
+    # ── PAGE: ATTENDANCE ANOMALIES ───────────────────────────────────────────
+    try:
+        from engine.anomaly import detect_attendance_anomalies
+
+        anomalies_pdf = detect_attendance_anomalies(units, attendance_map)
+        if anomalies_pdf:
+            story.append(PageBreak())
+            story.append(_header_table("CPG Seat Planning Report",
+                                       scenario.name, report_date, styles))
+            story.extend(_section_header("Attendance Anomalies", styles))
+            story.append(Paragraph(
+                "Units flagged for statistically unusual attendance patterns "
+                "(more than 2 standard deviations from the mean).",
+                caption))
+            story.append(Spacer(1, 0.2 * cm))
+
+            anom_header = ["Unit", "Metric", "Value", "Z-Score", "Type", "Recommendation"]
+            anom_data = []
+            for a in anomalies_pdf:
+                anom_data.append([
+                    a["unit_name"], a["metric"],
+                    str(a["value"]), f"{a['z_score']:+.2f}",
+                    a["anomaly_type"], a["recommendation"],
+                ])
+
+            def _anom_row_bg(i, _row):
+                z = abs(anomalies_pdf[i]["z_score"])
+                if z > 3:
+                    return RED_BG
+                elif z > 2:
+                    return AMBER_BG
+                return GREY_ROW if i % 2 == 0 else WHITE
+
+            story.append(_std_table(anom_header, anom_data,
+                                    ["12%", "14%", "8%", "10%", "24%", "32%"],
+                                    _anom_row_bg))
+    except Exception:
+        pass  # Graceful degradation
+
     doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
     return buf.getvalue()

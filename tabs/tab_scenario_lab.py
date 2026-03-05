@@ -599,3 +599,57 @@ def render(sidebar_state):
                 mime="application/pdf",
                 key="btn_download_pdf",
             )
+
+        # --- Sensitivity Analysis (AI) ---
+        st.divider()
+        with st.expander("Sensitivity Analysis", expanded=False):
+            st.caption(
+                "Automatically varies key planning parameters one at a time and measures "
+                "the impact on total seat gap. Identifies which levers matter most."
+            )
+
+            if st.button("Run Sensitivity Analysis", key="btn_sensitivity"):
+                from engine.sensitivity import (
+                    run_sensitivity_analysis, get_parameter_impact_summary,
+                )
+                from components.charts import tornado_chart
+
+                with st.spinner("Running sensitivity analysis (this may take a moment)..."):
+                    att_map_sens = {a.unit_name: a for a in attendance_profiles}
+                    sens_results = run_sensitivity_analysis(
+                        scenario, units, att_map_sens, floors, get_rule_config(),
+                    )
+
+                if sens_results:
+                    fig = tornado_chart(sens_results)
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    param_summary = get_parameter_impact_summary(sens_results)
+                    st.markdown("**Parameter Impact Ranking:**")
+                    summary_rows = []
+                    for ps in param_summary:
+                        summary_rows.append({
+                            "Parameter": ps["parameter"],
+                            "Impact Range (seats)": f"{ps['range']:+,}",
+                            "Max Positive": f"{ps['max_positive_delta']:+,}",
+                            "Max Negative": f"{ps['max_negative_delta']:+,}",
+                            "Most Impactful Variation": ps["most_impactful_variation"],
+                        })
+                    st.dataframe(pd.DataFrame(summary_rows),
+                                 use_container_width=True, hide_index=True)
+
+                    with st.expander("Detailed Results", expanded=False):
+                        detail_rows = []
+                        for r in sens_results:
+                            detail_rows.append({
+                                "Parameter": r["parameter"],
+                                "Variation": r["variation_label"],
+                                "New Value": r["variation_value"],
+                                "Baseline Gap": r["baseline_gap"],
+                                "Result Gap": r["result_gap"],
+                                "Delta": f"{r['gap_delta']:+,}",
+                            })
+                        st.dataframe(pd.DataFrame(detail_rows),
+                                     use_container_width=True, hide_index=True)
+                else:
+                    st.info("No sensitivity results generated.")

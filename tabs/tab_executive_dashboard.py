@@ -294,6 +294,19 @@ def render(sidebar_state):
                 "Detail": f"Across {', '.join(detail_parts)}",
             })
 
+    # Attendance anomaly alerts
+    from engine.anomaly import detect_attendance_anomalies, get_anomaly_summary
+    att_map_anom = {a.unit_name: a for a in attendance_profiles}
+    anomalies = detect_attendance_anomalies(units, att_map_anom)
+    anomaly_summary = get_anomaly_summary(anomalies)
+
+    for anom in anomalies:
+        other_alerts.append({
+            "Unit": anom["unit_name"],
+            "Alert": f"Anomaly: {anom['anomaly_type']}",
+            "Detail": f"Z-score: {anom['z_score']:+.2f} ({anom['metric']} = {anom['value']})",
+        })
+
     has_any = capacity_alerts or rto_all_data or other_alerts
 
     st.subheader("Planning Alerts")
@@ -337,7 +350,9 @@ def render(sidebar_state):
                 f'<div style="{card_css}background:{oth_bg};border-left:4px solid {oth_bdr};">'
                 f'<span style="font-size:1.25em;font-weight:700;">⚠️ {oth_count}</span><br/>'
                 f'<span style="font-size:0.78em;color:#444;">Other Alerts</span><br/>'
-                f'<span style="font-size:0.72em;color:#666;">Fragmentation &amp; cross-building spread</span>'
+                f'<span style="font-size:0.72em;color:#666;">Fragmentation, cross-building spread'
+                f'{f" &amp; {anomaly_summary[\"total_anomalies\"]} anomalies" if anomaly_summary.get("total_anomalies") else ""}'
+                f'</span>'
                 f'</div>', unsafe_allow_html=True)
 
         st.markdown("<div style='margin-top:10px;'></div>", unsafe_allow_html=True)

@@ -160,3 +160,78 @@ def scenario_comparison_bar(comparison_df: pd.DataFrame) -> go.Figure:
         height=400,
     )
     return fig
+
+
+def tornado_chart(
+    sensitivity_data: List[dict],
+    title: str = "Sensitivity Analysis — Impact on Total Seat Gap",
+) -> go.Figure:
+    """Horizontal tornado chart showing parameter sensitivity ranked by impact."""
+    df = pd.DataFrame(sensitivity_data)
+    df = df.nlargest(12, "abs_delta")
+    df["label"] = df["parameter"] + " (" + df["variation_label"] + ")"
+    df = df.sort_values("abs_delta", ascending=True)
+
+    colors_list = ["#CC0000" if d < 0 else "#006400" for d in df["gap_delta"]]
+
+    fig = go.Figure(go.Bar(
+        x=df["gap_delta"],
+        y=df["label"],
+        orientation="h",
+        marker_color=colors_list,
+        text=[f"{d:+d}" for d in df["gap_delta"]],
+        textposition="auto",
+    ))
+    fig.update_layout(
+        title=title,
+        xaxis_title="Change in Total Seat Gap (seats)",
+        yaxis_title="",
+        height=max(350, len(df) * 35),
+        showlegend=False,
+    )
+    fig.add_vline(x=0, line_dash="dash", line_color="grey")
+    return fig
+
+
+def colocation_heatmap(
+    scores: List[dict],
+    title: str = "Unit Co-location Affinity",
+) -> go.Figure:
+    """Heatmap of pairwise co-location scores (top pairs only)."""
+    if not scores:
+        return go.Figure()
+
+    unit_set = set()
+    for s in scores:
+        unit_set.add(s["unit_a"])
+        unit_set.add(s["unit_b"])
+    unit_list = sorted(unit_set)
+
+    n = len(unit_list)
+    idx = {name: i for i, name in enumerate(unit_list)}
+    matrix = [[0.0] * n for _ in range(n)]
+    for s in scores:
+        i, j = idx[s["unit_a"]], idx[s["unit_b"]]
+        matrix[i][j] = s["score"]
+        matrix[j][i] = s["score"]
+    for i in range(n):
+        matrix[i][i] = 1.0
+
+    fig = go.Figure(data=go.Heatmap(
+        z=matrix,
+        x=unit_list,
+        y=unit_list,
+        colorscale="Greens",
+        zmin=0, zmax=1,
+        text=[[f"{v:.2f}" for v in row] for row in matrix],
+        texttemplate="%{text}",
+        hovertemplate="Unit A: %{y}<br>Unit B: %{x}<br>Score: %{z:.2f}<extra></extra>",
+        colorbar=dict(title="Score"),
+    ))
+    fig.update_layout(
+        title=title,
+        height=max(400, n * 50),
+        xaxis_title="Unit",
+        yaxis_title="Unit",
+    )
+    return fig

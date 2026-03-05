@@ -608,7 +608,7 @@ def render(sidebar_state):
                 "the impact on total seat gap. Identifies which levers matter most."
             )
 
-            if st.button("Run Sensitivity Analysis", key="btn_sensitivity"):
+            if st.button("Run Sensitivity Analysis", key=f"btn_sensitivity_{scenario.scenario_id}"):
                 from engine.sensitivity import (
                     run_sensitivity_analysis, get_parameter_impact_summary,
                 )

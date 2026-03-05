@@ -141,3 +141,55 @@ def get_parameter_impact_summary(results: List[dict]) -> List[dict]:
 
     summary.sort(key=lambda s: s["range"], reverse=True)
     return summary
+
+
+def run_single_what_if(
+    base_scenario: Scenario,
+    units: List[Unit],
+    attendance_map: Dict[str, AttendanceProfile],
+    floors: List[Floor],
+    rule_config: Optional[dict] = None,
+    alloc_pct: Optional[float] = None,
+    horizon_months: Optional[int] = None,
+    capacity_reduction: Optional[float] = None,
+    rto_mandate: Optional[float] = None,
+) -> dict:
+    """Run a single what-if comparison with user-specified parameter overrides.
+
+    Each parameter defaults to the base scenario value when not specified.
+    Returns: {baseline_gap, result_gap, gap_delta, changed_params}
+    """
+    cfg = dict(rule_config or {})
+    if alloc_pct is not None:
+        cfg["global_alloc_pct"] = alloc_pct
+
+    test = copy.deepcopy(base_scenario)
+    if horizon_months is not None:
+        test.planning_horizon_months = horizon_months
+    if capacity_reduction is not None:
+        test.params.capacity_reduction_pct = capacity_reduction
+    if rto_mandate is not None:
+        test.params.global_rto_mandate_days = rto_mandate
+
+    baseline = copy.deepcopy(base_scenario)
+    baseline = run_scenario(baseline, units, attendance_map, floors, rule_config or {})
+    baseline_gap = _compute_total_gap(baseline)
+
+    test = run_scenario(test, units, attendance_map, floors, cfg)
+    result_gap = _compute_total_gap(test)
+
+    changed = {
+        k: v for k, v in {
+            "Global Alloc %": alloc_pct,
+            "Planning Horizon": horizon_months,
+            "Capacity Reduction": capacity_reduction,
+            "RTO Mandate": rto_mandate,
+        }.items() if v is not None
+    }
+
+    return {
+        "baseline_gap": baseline_gap,
+        "result_gap": result_gap,
+        "gap_delta": result_gap - baseline_gap,
+        "changed_params": changed,
+    }

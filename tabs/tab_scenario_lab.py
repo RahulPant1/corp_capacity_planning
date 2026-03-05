@@ -600,56 +600,76 @@ def render(sidebar_state):
                 key="btn_download_pdf",
             )
 
-        # --- Sensitivity Analysis (AI) ---
+        # --- Sensitivity Analysis (What-If) ---
         st.divider()
-        with st.expander("Sensitivity Analysis", expanded=False):
+        with st.expander("Sensitivity Analysis (What-If)", expanded=False):
             st.caption(
-                "Automatically varies key planning parameters one at a time and measures "
-                "the impact on total seat gap. Identifies which levers matter most."
+                "Set specific values for each planning parameter and run a single what-if "
+                "comparison against the current scenario baseline."
             )
 
-            if st.button("Run Sensitivity Analysis", key=f"btn_sensitivity_{scenario.scenario_id}"):
-                from engine.sensitivity import (
-                    run_sensitivity_analysis, get_parameter_impact_summary,
+            rule_config_sens = get_rule_config()
+            col1, col2 = st.columns(2)
+            with col1:
+                whatif_alloc = st.slider(
+                    "Global Alloc %",
+                    min_value=0.50, max_value=1.50,
+                    value=float(rule_config_sens.get("global_alloc_pct", 0.80)),
+                    step=0.05, format="%.0f%%",
+                    key=f"sens_alloc_{scenario.scenario_id}",
+                    help="Space allocated as a fraction of projected headcount.",
                 )
-                from components.charts import tornado_chart
+                whatif_horizon = st.slider(
+                    "Planning Horizon (months)",
+                    min_value=3, max_value=48,
+                    value=int(scenario.planning_horizon_months),
+                    step=3,
+                    key=f"sens_horizon_{scenario.scenario_id}",
+                    help="Number of months ahead to plan headcount growth.",
+                )
+            with col2:
+                whatif_cap_red = st.slider(
+                    "Capacity Reduction %",
+                    min_value=0.0, max_value=0.30,
+                    value=float(scenario.params.capacity_reduction_pct or 0.0),
+                    step=0.05, format="%.0f%%",
+                    key=f"sens_capred_{scenario.scenario_id}",
+                    help="Effective floor capacity removed (e.g. social distancing buffer).",
+                )
+                whatif_rto = st.slider(
+                    "Global RTO Mandate (days/week)",
+                    min_value=0.5, max_value=5.0,
+                    value=float(scenario.params.global_rto_mandate_days or 3.0),
+                    step=0.5,
+                    key=f"sens_rto_{scenario.scenario_id}",
+                    help="Minimum RTO days per week applied to all units.",
+                )
 
-                with st.spinner("Running sensitivity analysis (this may take a moment)..."):
+            if st.button("Run What-If", key=f"btn_whatif_{scenario.scenario_id}"):
+                from engine.sensitivity import run_single_what_if
+                with st.spinner("Running what-if scenario..."):
                     att_map_sens = {a.unit_name: a for a in attendance_profiles}
-                    sens_results = run_sensitivity_analysis(
-                        scenario, units, att_map_sens, floors, get_rule_config(),
+                    whatif_result = run_single_what_if(
+                        scenario, units, att_map_sens, floors, rule_config_sens,
+                        alloc_pct=whatif_alloc,
+                        horizon_months=whatif_horizon,
+                        capacity_reduction=whatif_cap_red,
+                        rto_mandate=whatif_rto,
                     )
 
-                if sens_results:
-                    fig = tornado_chart(sens_results)
-                    st.plotly_chart(fig, use_container_width=True)
+                delta = whatif_result["gap_delta"]
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Baseline Gap", f"{whatif_result['baseline_gap']:,} seats")
+                c2.metric("What-If Gap", f"{whatif_result['result_gap']:,} seats")
+                c3.metric("Change", f"{delta:+,} seats", delta=str(delta), delta_color="inverse")
 
-                    param_summary = get_parameter_impact_summary(sens_results)
-                    st.markdown("**Parameter Impact Ranking:**")
-                    summary_rows = []
-                    for ps in param_summary:
-                        summary_rows.append({
-                            "Parameter": ps["parameter"],
-                            "Impact Range (seats)": f"{ps['range']:+,}",
-                            "Max Positive": f"{ps['max_positive_delta']:+,}",
-                            "Max Negative": f"{ps['max_negative_delta']:+,}",
-                            "Most Impactful Variation": ps["most_impactful_variation"],
-                        })
-                    st.dataframe(pd.DataFrame(summary_rows),
-                                 use_container_width=True, hide_index=True)
-
-                    with st.expander("Detailed Results", expanded=False):
-                        detail_rows = []
-                        for r in sens_results:
-                            detail_rows.append({
-                                "Parameter": r["parameter"],
-                                "Variation": r["variation_label"],
-                                "New Value": r["variation_value"],
-                                "Baseline Gap": r["baseline_gap"],
-                                "Result Gap": r["result_gap"],
-                                "Delta": f"{r['gap_delta']:+,}",
-                            })
-                        st.dataframe(pd.DataFrame(detail_rows),
-                                     use_container_width=True, hide_index=True)
+                if whatif_result["changed_params"]:
+                    st.markdown("**Parameters changed from baseline:**")
+                    for param, val in whatif_result["changed_params"].items():
+                        st.markdown(f"- **{param}**: `{val}`")
+                if delta == 0:
+                    st.info("No seat gap change under these parameters.")
+                elif delta < 0:
+                    st.success(f"Seat gap reduced by {abs(delta):,} seats with these settings.")
                 else:
-                    st.info("No sensitivity results generated.")
+                    st.warning(f"Seat gap increases by {delta:,} seats with these settings.")

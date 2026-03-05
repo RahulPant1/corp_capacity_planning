@@ -108,37 +108,30 @@ def render(sidebar_state):
             if selected_obj == "rto_whatif" and target_rto:
                 st.markdown(f"- **Target RTO**: {target_rto} days/week for all units")
 
-    # --- Advanced Runtime Constraints ---
-    with st.expander("Runtime Constraints (Optional)", expanded=False):
-        st.caption("These constraints are applied on top of the objective. They may make the problem infeasible if too strict — the optimizer will warn you.")
-        st.caption("If constraints make the problem infeasible, the optimizer relaxes them and shows a warning.")
+    # --- Quick Controls ---
+    st.subheader("Quick Controls")
+    st.caption("These constraints are applied on top of the objective. The optimizer relaxes them if they make the problem infeasible.")
+    qc1, qc2 = st.columns(2)
+    with qc1:
+        max_floors_val = st.slider(
+            "Max floors per unit",
+            min_value=1, max_value=5, value=3,
+            key="opt_maxfloors_val",
+            help="Limits how many floors each unit can occupy. Lower = more consolidated.",
+        )
+    with qc2:
+        min_guar_val = st.slider(
+            "Minimum seat guarantee (% of demand)",
+            min_value=50, max_value=100, value=80,
+            key="opt_minguar_val",
+            help="Each unit is guaranteed at least this % of their demand, even under scarcity.",
+        ) / 100.0
 
-        col1, col2 = st.columns(2)
-
-        with col1:
-            max_floors_enabled = st.checkbox("Limit max floors per unit", key="opt_maxfloors_on")
-            max_floors_val = None
-            if max_floors_enabled:
-                max_floors_val = st.slider(
-                    "Max floors per unit", min_value=1, max_value=5, value=2,
-                    key="opt_maxfloors_val",
-                    help="Each unit will be placed on at most this many floors, reducing fragmentation."
-                )
-
-        with col2:
-            min_guar_enabled = st.checkbox("Minimum seats guarantee", key="opt_minguar_on")
-            min_guar_val = None
-            if min_guar_enabled:
-                min_guar_val = st.slider(
-                    "Min % of demand guaranteed per unit", min_value=50, max_value=100, value=80,
-                    key="opt_minguar_val",
-                    help="Each unit receives at least this % of their demand even under scarcity."
-                ) / 100.0
-
-        st.markdown("**Pin units to specific towers** (leave blank = no restriction)")
+    # --- Advanced: Unit Tower Restrictions ---
+    with st.expander("Advanced: Unit Tower Restrictions", expanded=False):
+        st.caption("Pin specific units to certain towers. Leave all towers selected = no restriction.")
         pin_data = {}
         if tower_ids:
-            pin_rows = []
             saved_pins = st.session_state.get("opt_pin_selections", {})
             for uname in unit_names:
                 saved = saved_pins.get(uname, tower_ids)
@@ -196,9 +189,9 @@ def render(sidebar_state):
                 attendance_map=scenario_att_map,
                 rule_config=config,
                 target_rto_days=target_rto,
-                max_floors_per_unit=max_floors_val if max_floors_enabled else None,
+                max_floors_per_unit=max_floors_val,
                 pinned_tower_ids=pinned_tower_ids,
-                min_guarantee_pct=min_guar_val if min_guar_enabled else None,
+                min_guarantee_pct=min_guar_val,
             )
 
         # Store in history (last 3 runs)

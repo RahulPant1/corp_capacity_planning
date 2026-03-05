@@ -346,13 +346,13 @@ def render(sidebar_state):
                 f'<span style="font-size:0.72em;color:#666;">Allocation vs attendance-based need</span>'
                 f'</div>', unsafe_allow_html=True)
         with c3:
+            anom_count = anomaly_summary.get("total_anomalies", 0)
+            anom_suffix = f" &amp; {anom_count} anomalies" if anom_count else ""
             st.markdown(
                 f'<div style="{card_css}background:{oth_bg};border-left:4px solid {oth_bdr};">'
                 f'<span style="font-size:1.25em;font-weight:700;">⚠️ {oth_count}</span><br/>'
                 f'<span style="font-size:0.78em;color:#444;">Other Alerts</span><br/>'
-                f'<span style="font-size:0.72em;color:#666;">Fragmentation, cross-building spread'
-                f'{f" &amp; {anomaly_summary[\"total_anomalies\"]} anomalies" if anomaly_summary.get("total_anomalies") else ""}'
-                f'</span>'
+                f'<span style="font-size:0.72em;color:#666;">Fragmentation, cross-building spread{anom_suffix}</span>'
                 f'</div>', unsafe_allow_html=True)
 
         st.markdown("<div style='margin-top:10px;'></div>", unsafe_allow_html=True)

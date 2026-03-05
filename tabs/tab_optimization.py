@@ -108,7 +108,7 @@ def render(sidebar_state):
             from engine.sensitivity import run_single_what_if
             with st.spinner("Running what-if..."):
                 wi_result = run_single_what_if(
-                    scenario, units, att_map_raw, floors, rule_config_wi,
+                    scenario, units, att_map_raw, raw_floors, rule_config_wi,
                     alloc_pct=wi_alloc_pct / 100.0,
                     capacity_reduction=wi_cap_red_pct / 100.0,
                     rto_mandate=wi_rto,
@@ -140,7 +140,7 @@ def render(sidebar_state):
                     capacity_reduction_pct=wi_cap_red_pct / 100.0,
                     excluded_floors=scenario.params.excluded_floors,
                 )
-                scenario = run_scenario(scenario, units, att_map_raw, effective_floors, rc)
+                scenario = run_scenario(scenario, units, att_map_raw, raw_floors, rc)
                 update_scenario(scenario)
                 st.session_state.pop(f"wi_result_{scenario.scenario_id}", None)
                 st.success(
@@ -261,10 +261,18 @@ def render(sidebar_state):
         st.caption("No scenario constraints active — running against full floor supply.")
 
     # --- Run Optimization ---
-    col1, col2 = st.columns([1, 3])
+    col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
         run_opt = st.button("Run Optimization", type="primary", key="btn_run_opt")
     with col2:
+        run_sim_opt = st.button(
+            "Simulate & Optimize", key="btn_sim_opt",
+            help=(
+                "Applies the Planning What-If slider values, re-runs the simulation "
+                "to update demand, then optimizes floor placement — all in one step."
+            ),
+        )
+    with col3:
         run_sensitivity = st.button("Run Sensitivity Analysis", key="btn_sensitivity",
                                     help="Runs Lean/Balanced/Conservative buffer presets and compares seat demand range.")
 
@@ -297,6 +305,62 @@ def render(sidebar_state):
         })
         st.session_state["optimization_history"] = history[:3]
         st.session_state["optimization_result"] = result
+
+    if run_sim_opt:
+        import copy as _copy
+        with st.spinner("Simulating with What-If parameters, then optimizing..."):
+            # Step 1: build temp scenario with what-if planning params
+            rc_combined = dict(rule_config_wi)
+            rc_combined["global_alloc_pct"] = wi_alloc_pct / 100.0
+            temp_scenario = _copy.deepcopy(scenario)
+            temp_scenario.params = ScenarioParams(
+                global_rto_mandate_days=wi_rto if wi_rto > 0 else None,
+                capacity_reduction_pct=wi_cap_red_pct / 100.0,
+                excluded_floors=scenario.params.excluded_floors,
+            )
+            # Step 2: re-run simulation with modified demand params
+            temp_scenario = run_scenario(temp_scenario, units, att_map_raw, raw_floors, rc_combined)
+            # Step 3: derive effective floors + attendance for optimizer
+            temp_eff_floors = apply_floor_modifications(raw_floors, temp_scenario)
+            _, temp_att_map = apply_overrides(units, att_map_raw, temp_scenario)
+            # Step 4: run LP optimizer on updated demand
+            result = optimize_allocation(
+                allocations=temp_scenario.allocation_results,
+                floors=temp_eff_floors,
+                baseline_assignments=scenario.floor_assignments,
+                objective=selected_obj,
+                excluded_floor_ids=[],
+                units=units,
+                attendance_map=temp_att_map,
+                rule_config=rc_combined,
+                target_rto_days=target_rto,
+                max_floors_per_unit=max_floors_val,
+                pinned_tower_ids=pinned_tower_ids,
+                min_guarantee_pct=min_guar_val,
+            )
+
+        history = st.session_state.get("optimization_history", [])
+        history.insert(0, {
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "objective": objectives[selected_obj].split(" —")[0] + " (Sim+Opt)",
+            "total_seats": sum(result.unit_allocations.values()),
+            "floors_used": len(set((a.tower_id, a.floor_number) for a in result.assignments)),
+            "status": result.status,
+            "result": result,
+        })
+        st.session_state["optimization_history"] = history[:3]
+        st.session_state["optimization_result"] = result
+
+        # Show seat gap impact from the simulation step
+        baseline_gap = sum(a.seat_gap for a in scenario.allocation_results)
+        new_gap = sum(a.seat_gap for a in temp_scenario.allocation_results)
+        gap_delta = new_gap - baseline_gap
+        if gap_delta != 0:
+            st.info(
+                f"Planning What-If changed seat gap by **{gap_delta:+,} seats** "
+                f"(baseline {baseline_gap:,} → what-if {new_gap:,}). "
+                f"Optimization below reflects these updated demand figures."
+            )
 
     if run_sensitivity:
         with st.spinner("Running sensitivity analysis (Lean / Balanced / Conservative)..."):

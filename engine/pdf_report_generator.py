@@ -415,24 +415,103 @@ def generate_pdf_report(scenario, floors, units, attendance_map,
         alloc_row_bg,
     ))
 
-    # ── PAGE 3: FLOOR ASSIGNMENTS ─────────────────────────────────────────────
-    if assignments:
-        story.append(PageBreak())
-        story.append(_header_table("CPG Seat Planning Report",
-                                   scenario.name, report_date, styles))
-        story.extend(_section_header("Floor Assignments", styles))
+    # ── PAGE 3: FLOOR OCCUPANCY BY TOWER (stacked view) ──────────────────────
+    story.append(PageBreak())
+    story.append(_header_table("CPG Seat Planning Report",
+                               scenario.name, report_date, styles))
+    story.extend(_section_header("Floor Occupancy by Tower", styles))
+    story.append(Paragraph(
+        "Floors listed sequentially per tower. Each row shows unit allocations and available capacity. "
+        "Excluded floors are marked separately.",
+        caption))
+    story.append(Spacer(1, 0.2 * cm))
 
-        fa_header = ["Unit", "Building", "Tower", "Floor", "Seats", "Adjacency"]
-        fa_data = [
-            [a.unit_name, a.building_id, a.tower_id,
-             str(a.floor_number), str(a.seats_assigned), a.adjacency_tier]
-            for a in sorted(assignments,
-                            key=lambda x: (x.building_id, x.tower_id, x.floor_number))
+    # Build lookup structures
+    excluded_set = set(scenario.params.excluded_floors) if scenario.params.excluded_floors else set()
+    floor_map_lookup = {f.floor_id: f for f in floors}
+
+    # Group floors by tower (building-tower)
+    from collections import defaultdict, OrderedDict
+    tower_floors = defaultdict(list)
+    for f in floors:
+        tower_floors[f.tower_id].append(f)
+    for tid in tower_floors:
+        tower_floors[tid].sort(key=lambda f: f.floor_number)
+
+    # Group assignments by floor_id
+    assign_by_floor = defaultdict(list)
+    if assignments:
+        for a in assignments:
+            fid = f"{a.tower_id}-F{a.floor_number}"
+            assign_by_floor[fid].append(a)
+
+    # Render one table per tower
+    for tower_id in sorted(tower_floors.keys()):
+        tower_floor_list = tower_floors[tower_id]
+        bldg_name = tower_floor_list[0].building_name if tower_floor_list else ""
+        story.append(Spacer(1, 0.2 * cm))
+        story.append(Paragraph(
+            f"<b>{tower_id}</b> — {bldg_name}", bold))
+        story.append(Spacer(1, 0.1 * cm))
+
+        tw_header = ["Floor", "Status", "Total", "Used", "Avail", "Util %", "Units on Floor"]
+        tw_data = []
+        tw_row_styles = []  # track per-row styling
+
+        for f in tower_floor_list:
+            fid = f.floor_id
+            if fid in excluded_set:
+                tw_data.append([
+                    f"F{f.floor_number}", "EXCLUDED", str(f.total_seats),
+                    "—", "—", "—", "Floor excluded from planning",
+                ])
+                tw_row_styles.append("excluded")
+            else:
+                floor_assigns = assign_by_floor.get(fid, [])
+                used = sum(a.seats_assigned for a in floor_assigns)
+                avail = f.total_seats - used
+                util = f"{used / f.total_seats:.0%}" if f.total_seats > 0 else "—"
+                # Build unit summary: "Engineering (80), Sales (40)"
+                unit_parts = sorted(
+                    [(a.unit_name, a.seats_assigned) for a in floor_assigns],
+                    key=lambda x: -x[1],
+                )
+                units_str = ", ".join(f"{n} ({s})" for n, s in unit_parts) if unit_parts else "Empty"
+                tw_data.append([
+                    f"F{f.floor_number}", "Active", str(f.total_seats),
+                    str(used), str(avail), util, units_str,
+                ])
+                tw_row_styles.append("active")
+
+        # Build table with custom styling
+        all_rows = [tw_header] + tw_data
+        t = Table(all_rows, colWidths=["8%", "11%", "8%", "8%", "8%", "8%", "49%"], repeatRows=1)
+        style_cmds = [
+            ("BACKGROUND",    (0, 0), (-1, 0), NAVY),
+            ("TEXTCOLOR",     (0, 0), (-1, 0), WHITE),
+            ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE",      (0, 0), (-1, -1), 7),
+            ("FONTNAME",      (0, 1), (-1, -1), "Helvetica"),
+            ("ALIGN",         (0, 0), (-1, -1), "LEFT"),
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 4),
+            ("GRID",          (0, 0), (-1, -1), 0.3, colors.HexColor("#CCCCCC")),
         ]
-        story.append(_std_table(
-            fa_header, fa_data,
-            ["28%", "14%", "14%", "10%", "12%", "22%"],
-        ))
+        for i, row_style in enumerate(tw_row_styles):
+            row_idx = i + 1  # offset for header
+            if row_style == "excluded":
+                style_cmds.append(("BACKGROUND", (0, row_idx), (-1, row_idx),
+                                   colors.HexColor("#F0D0D0")))
+                style_cmds.append(("TEXTCOLOR", (0, row_idx), (-1, row_idx),
+                                   colors.HexColor("#8B0000")))
+            else:
+                style_cmds.append(("BACKGROUND", (0, row_idx), (-1, row_idx),
+                                   GREY_ROW if i % 2 == 0 else WHITE))
+        t.setStyle(TableStyle(style_cmds))
+        story.append(t)
 
     # ── PAGE: FLOOR UTILIZATION MAPS ──────────────────────────────────────────
     if assignments:

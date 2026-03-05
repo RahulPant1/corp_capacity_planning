@@ -165,6 +165,77 @@ def _footer(canvas, doc):
     canvas.restoreState()
 
 
+def _executive_summary_text(scenario, floors, allocs, opt_history=None):
+    """Generate a rule-based executive brief paragraph from scenario data."""
+    n_buildings = len(set(f.building_id for f in floors))
+    supply = sum(f.total_seats for f in floors)
+    demand = sum(a.effective_demand_seats for a in allocs)
+    alloc = sum(a.allocated_seats for a in allocs)
+    gap = alloc - demand
+    gap_word = "surplus" if gap >= 0 else "shortfall"
+    at_risk = sum(1 for a in allocs if a.seat_gap < 0)
+    n_units = len(allocs)
+
+    lines = [
+        f"This report presents the seat planning analysis for scenario "
+        f"\"{scenario.name}\" ({scenario.scenario_type}) over a "
+        f"{scenario.planning_horizon_months}-month planning horizon.",
+        "",
+        f"Total seat supply across {n_buildings} building(s) is {supply:,} seats "
+        f"against a projected demand of {demand:,} seats, resulting in a net "
+        f"{gap_word} of {abs(gap):,} seats. "
+        f"{at_risk} of {n_units} business unit(s) are flagged as at-risk due to "
+        f"seat shortfalls or high fragmentation.",
+    ]
+
+    # Hot-seating savings
+    hot_savings = sum(a.hot_seat_savings for a in allocs)
+    if hot_savings > 0:
+        shift_units = sum(1 for a in allocs if a.hot_seat_savings > 0)
+        physical = sum(a.physical_demand for a in allocs)
+        lines.append("")
+        lines.append(
+            f"Hot-seating across {shift_units} unit(s) with night shifts saves "
+            f"{hot_savings:,} seats, reducing physical demand to {physical:,}."
+        )
+
+    # Risk sentence
+    red_n = sum(1 for a in allocs
+                if (a.seat_gap / a.effective_demand_seats if a.effective_demand_seats else 0)
+                < -0.15 or a.fragmentation_score > 0.7)
+    amber_n = sum(1 for a in allocs
+                  if (a.seat_gap / a.effective_demand_seats if a.effective_demand_seats else 0)
+                  < -0.05 or a.fragmentation_score > 0.5) - red_n
+    lines.append("")
+    if red_n > 0 or amber_n > 0:
+        worst = sorted(allocs, key=lambda a: a.seat_gap)[:2]
+        names = ", ".join(a.unit_name for a in worst)
+        lines.append(
+            f"{red_n} unit(s) are RED risk (critical shortfall), {amber_n} are AMBER. "
+            f"Key concerns: {names}."
+        )
+    else:
+        lines.append("All units are GREEN — no critical risks identified.")
+
+    # Recommendation
+    lines.append("")
+    opt_run = opt_history[-1] if opt_history else None
+    if opt_run:
+        saved = opt_run.get("seats_saved", 0)
+        freed = opt_run.get("floors_freed", 0)
+        lines.append(
+            f"Optimization has been applied — {saved} seats saved, "
+            f"{freed} floor(s) freed."
+        )
+    else:
+        lines.append(
+            "Consider running LP optimization to consolidate placements "
+            "and recover underutilized seats."
+        )
+
+    return "\n".join(lines)
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 def generate_pdf_report(scenario, floors, units, attendance_map,
                         rule_config, opt_history=None) -> bytes:
@@ -197,6 +268,20 @@ def generate_pdf_report(scenario, floors, units, attendance_map,
 
     story.append(_kpi_table(total_supply, total_demand, net_gap, at_risk, styles))
     story.append(Spacer(1, 0.4 * cm))
+
+    # Executive Summary brief
+    exec_summary = _executive_summary_text(scenario, floors, allocs, opt_history)
+    exec_style = ParagraphStyle(
+        "exec_brief", parent=body,
+        fontSize=9, leading=13, backColor=colors.HexColor("#EBF5FF"),
+        borderPadding=8, spaceBefore=4, spaceAfter=8,
+    )
+    story.extend(_section_header("Executive Summary", styles))
+    for para_text in exec_summary.split("\n\n"):
+        if para_text.strip():
+            story.append(Paragraph(para_text.strip(), exec_style))
+            story.append(Spacer(1, 0.15 * cm))
+    story.append(Spacer(1, 0.3 * cm))
 
     # Scenario metadata
     last_run = (scenario.last_run_at.strftime("%d %b %Y, %H:%M")
@@ -320,7 +405,72 @@ def generate_pdf_report(scenario, floors, units, attendance_map,
             ["28%", "14%", "14%", "10%", "12%", "22%"],
         ))
 
-    # ── PAGE 4: RISKS & ALERTS ────────────────────────────────────────────────
+    # ── PAGE: FLOOR UTILIZATION MAPS ──────────────────────────────────────────
+    if assignments:
+        try:
+            from components.floor_map import render_floor_map, _get_unit_color_map
+            import plotly.io as pio
+
+            # Build per-floor data
+            floor_lookup = {f.floor_id: f.total_seats for f in floors}
+            floor_assign_map = {}
+            for a in assignments:
+                fid = f"{a.tower_id}-F{a.floor_number}"
+                if fid not in floor_assign_map:
+                    floor_assign_map[fid] = {
+                        "total_seats": floor_lookup.get(fid, 0),
+                        "assignments": [],
+                    }
+                floor_assign_map[fid]["assignments"].append({
+                    "unit_name": a.unit_name,
+                    "seats_assigned": a.seats_assigned,
+                })
+
+            all_unit_names = list(set(a.unit_name for a in assignments))
+            color_map = _get_unit_color_map(all_unit_names)
+
+            story.append(PageBreak())
+            story.append(_header_table("CPG Seat Planning Report",
+                                       scenario.name, report_date, styles))
+            story.extend(_section_header("Floor Utilization Maps", styles))
+            story.append(Paragraph(
+                "Each block represents a unit's seat allocation. Grey = available capacity.",
+                caption))
+            story.append(Spacer(1, 0.2 * cm))
+
+            from reportlab.platypus import Image as RLImage
+
+            map_images = []
+            for fid in sorted(floor_assign_map.keys()):
+                fdata = floor_assign_map[fid]
+                fig = render_floor_map(
+                    assignments=fdata["assignments"],
+                    total_seats=fdata["total_seats"],
+                    floor_label=fid,
+                    unit_color_map=color_map,
+                    height=200,
+                )
+                img_bytes = pio.to_image(fig, format="png", width=380, height=200, scale=2)
+                img_io = io.BytesIO(img_bytes)
+                map_images.append(RLImage(img_io, width=8.5 * cm, height=4.5 * cm))
+
+            # Layout: 2 per row
+            for i in range(0, len(map_images), 2):
+                row_imgs = map_images[i:i + 2]
+                if len(row_imgs) == 1:
+                    row_imgs.append("")
+                t = Table([row_imgs], colWidths=["50%", "50%"])
+                t.setStyle(TableStyle([
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]))
+                story.append(t)
+        except Exception:
+            # kaleido not installed or other error — skip floor maps
+            pass
+
+    # ── PAGE: RISKS & ALERTS ─────────────────────────────────────────────────
     story.append(PageBreak())
     story.append(_header_table("CPG Seat Planning Report",
                                scenario.name, report_date, styles))

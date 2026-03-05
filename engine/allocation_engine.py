@@ -81,6 +81,13 @@ def compute_recommended_allocation(
         was_clamped=was_clamped,
     )
 
+    # Hot-seating: split into day/night shifts
+    night_pct = unit.night_shift_pct
+    day_demand = round(effective_demand * (1 - night_pct))
+    night_demand = round(effective_demand * night_pct)
+    physical_demand = max(day_demand, night_demand) if night_pct > 0 else effective_demand
+    hot_seat_savings = effective_demand - physical_demand
+
     return AllocationRecommendation(
         unit_name=unit.unit_name,
         recommended_alloc_pct=recommended_alloc_pct,
@@ -89,6 +96,10 @@ def compute_recommended_allocation(
         seat_gap=0,
         fragmentation_score=0.0,
         explanation_steps=explanation,
+        day_demand=day_demand,
+        night_demand=night_demand,
+        physical_demand=physical_demand,
+        hot_seat_savings=hot_seat_savings,
     )
 
 
@@ -146,6 +157,13 @@ def compute_simple_allocation(
         was_clamped=was_clamped,
     )
 
+    # Hot-seating: split into day/night shifts
+    night_pct = unit.night_shift_pct
+    day_demand = round(effective_demand * (1 - night_pct))
+    night_demand = round(effective_demand * night_pct)
+    physical_demand = max(day_demand, night_demand) if night_pct > 0 else effective_demand
+    hot_seat_savings = effective_demand - physical_demand
+
     return AllocationRecommendation(
         unit_name=unit.unit_name,
         recommended_alloc_pct=recommended_alloc_pct,
@@ -154,6 +172,10 @@ def compute_simple_allocation(
         seat_gap=0,
         fragmentation_score=0.0,
         explanation_steps=explanation,
+        day_demand=day_demand,
+        night_demand=night_demand,
+        physical_demand=physical_demand,
+        hot_seat_savings=hot_seat_savings,
     )
 
 

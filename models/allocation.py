@@ -14,6 +14,10 @@ class AllocationRecommendation:
     is_overridden: bool = False
     override_alloc_pct: Optional[float] = None
     override_rationale: str = ""
+    day_demand: int = 0
+    night_demand: int = 0
+    physical_demand: int = 0       # max(day, night) — actual seats to place
+    hot_seat_savings: int = 0      # effective_demand - physical_demand
 
 
 @dataclass

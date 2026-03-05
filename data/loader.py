@@ -28,11 +28,15 @@ def parse_units(df: pd.DataFrame) -> List[Unit]:
         priority = None
         if "Business Priority" in df.columns and pd.notna(row.get("Business Priority")):
             priority = str(row["Business Priority"]).strip()
+        night_shift_pct = 0.0
+        if "Night Shift %" in df.columns and pd.notna(row.get("Night Shift %")):
+            night_shift_pct = float(row["Night Shift %"]) / 100.0
         units.append(Unit(
             unit_name=str(row["Unit Name"]).strip(),
             current_total_hc=int(row["Current Total Headcount"]),
             hc_growth_pct=float(row["HC Growth Forecast (%)"]) / 100.0,
             business_priority=priority,
+            night_shift_pct=night_shift_pct,
         ))
     return units
 

@@ -124,7 +124,9 @@ def optimize_allocation(
         elif objective == "rto_whatif" and u in att_map and target_rto_days is not None:
             demand[u] = _compute_rto_demand(att_map[u], buffer_mult, override_rto=target_rto_days)
         else:
-            demand[u] = alloc_map[u].effective_demand_seats
+            # Use physical_demand (hot-seating adjusted) if available, else effective_demand
+            alloc = alloc_map[u]
+            demand[u] = alloc.physical_demand if alloc.physical_demand > 0 else alloc.effective_demand_seats
 
     prob = pulp.LpProblem("SeatAllocation", pulp.LpMinimize)
 

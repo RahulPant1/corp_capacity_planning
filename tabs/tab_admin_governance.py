@@ -269,6 +269,7 @@ def render(sidebar_state):
                     "Growth %": u.hc_growth_pct * 100,
                     "Priority": u.business_priority or "None",
                     "Seat Alloc %": (u.seat_alloc_pct * 100) if u.seat_alloc_pct is not None else None,
+                    "Night Shift %": u.night_shift_pct * 100,
                 } for u in current_units]
                 unit_edit_df = pd.DataFrame(unit_rows)
 
@@ -294,11 +295,13 @@ def render(sidebar_state):
                         new_priority = row["Priority"] if row["Priority"] != "None" else None
                         raw_alloc = row["Seat Alloc %"]
                         new_seat_alloc = float(raw_alloc) / 100.0 if pd.notna(raw_alloc) else None
+                        new_night_shift = float(row["Night Shift %"]) / 100.0 if pd.notna(row.get("Night Shift %")) else 0.0
 
                         if (new_hc != u.current_total_hc or
                             abs(new_growth - u.hc_growth_pct) > 0.001 or
                             new_priority != u.business_priority or
-                            new_seat_alloc != u.seat_alloc_pct):
+                            new_seat_alloc != u.seat_alloc_pct or
+                            abs(new_night_shift - u.night_shift_pct) > 0.001):
                             add_audit_entry(
                                 "edit_base_data", "baseline", "unit_data",
                                 f"HC={u.current_total_hc},G={u.hc_growth_pct:.1%}",
@@ -310,6 +313,7 @@ def render(sidebar_state):
                             u.hc_growth_pct = new_growth
                             u.business_priority = new_priority
                             u.seat_alloc_pct = new_seat_alloc
+                            u.night_shift_pct = new_night_shift
                             changed = True
                     if changed:
                         set_units(current_units)

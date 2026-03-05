@@ -169,6 +169,16 @@ def render(sidebar_state):
          "delta_color": "inverse" if impacted_units > 0 else "normal"},
     ])
 
+    # Hot-seating savings (if any unit has night shift)
+    total_hot_savings = sum(a.hot_seat_savings for a in allocations)
+    if total_hot_savings > 0:
+        shift_units = sum(1 for a in allocations if a.hot_seat_savings > 0)
+        st.info(
+            f"**Hot-Seating Savings:** {total_hot_savings:,} seats saved via day/night desk sharing "
+            f"across {shift_units} unit(s). Physical demand reduced from {total_demand:,} to "
+            f"{total_demand - total_hot_savings:,} seats."
+        )
+
     # Scenario context (always visible)
     st.caption(
         f"Active scenario: **{scenario.name}** · Type: {scenario.scenario_type} · "

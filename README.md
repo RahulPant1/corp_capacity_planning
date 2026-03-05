@@ -81,6 +81,7 @@ Defines demand drivers and planning assumptions. **One row per business unit.**
 | `Current Total Headcount` | Current total HC for the unit | 400 |
 | `HC Growth Forecast (%)` | Expected net growth % over planning horizon (positive = growth, negative = downsizing) | 15 |
 | `Business Priority` | *(Optional)* High, Medium, or Low — used for scarcity prioritization | High |
+| `Night Shift %` | *(Optional)* Percentage of HC on night shift (0-100). Night-shift workers hot-seat on day-shift desks, reducing physical seat demand. Default: 0 | 10 |
 
 ### File 3: Attendance & RTO Behavior (Required)
 
@@ -105,6 +106,20 @@ Each unit is allocated a flat percentage of their headcount as seats (default: 8
 | 2. **Growth adjustment** | Base % x (1 + Growth% x months / 12) | 80% x 1.035 = 82.8% |
 | 3. **Policy clamp** | Clamped to [min, max] allocation bounds | 82.8% (within bounds) |
 | 4. **Effective demand** | Clamped % x Current headcount | 82.8% x 400 = 331 seats |
+
+### Night Shift & Hot-Seating
+
+Units with a non-zero `Night Shift %` enable hot-seating (desk sharing between shifts):
+
+| Step | Formula | Example (Engineering: 400 HC, 80% alloc, 10% night) |
+|------|---------|------------------------------------------------------|
+| 1. **Effective demand** | Alloc % x HC | 80% x 400 = 320 seats |
+| 2. **Day demand** | Effective x (1 - Night%) | 320 x 0.90 = 288 seats |
+| 3. **Night demand** | Effective x Night% | 320 x 0.10 = 32 seats |
+| 4. **Physical demand** | max(Day, Night) | max(288, 32) = 288 seats |
+| 5. **Hot-seat savings** | Effective - Physical | 320 - 288 = **32 seats saved** |
+
+Night-shift workers reuse the same desks as day-shift workers. Only the larger shift determines physical seat requirements.
 
 ### Attendance-Based Validation
 
@@ -157,11 +172,21 @@ A legend caption below the table explains Fragmentation, RTO Status, and Gap % d
 
 ### Tab 3: Spatial / Floor View
 
-Physical seat utilization across towers and floors:
+Physical seat utilization across towers and floors. Two view modes via toggle:
+
+**Charts view** (default):
 - Floor utilization bar chart (filter by tower) with Utilization % colorbar
 - Unit-by-floor heatmap showing seat distribution (zmin=0 baseline, Seats colorbar)
-- Floor detail table showing **Largest Unit (N seats)** per floor (replaces the old concatenated "Units (seats)" cell)
-- Consolidation suggestions for fragmented units
+
+**Floor Map view**:
+- Color-coded treemap blocks per floor showing each unit's seat allocation proportionally
+- Grey "Available" blocks for unused capacity
+- Consistent color palette across all floors for easy unit identification
+- 2-column grid layout for quick visual overview
+
+Both views share:
+- Floor detail table showing **Largest Unit (N seats)** per floor
+- Building spread analysis and consolidation suggestions for fragmented units
 
 ### Tab 4: Scenario Lab
 
@@ -196,7 +221,7 @@ After simulation, the Scenario Lab shows:
 - **Changes vs Baseline** — automatic comparison with side-by-side table and chart
 - **Download Report** — two formats side by side:
   - **Excel (.xlsx)** — allocation, floor assignments, risks, optimization run
-  - **PDF Boardroom Report (.pdf)** — professional 5-page report with color-coded tables (RED/AMBER/GREEN), KPI summary, floor assignments, risk narrative, and optional optimization results page; ready to email to leadership
+  - **PDF Boardroom Report (.pdf)** — professional multi-page report with: rule-based executive summary brief (no AI), color-coded tables (RED/AMBER/GREEN), KPI summary, floor utilization maps (treemap charts), floor assignments, risk narrative, hot-seating savings (if applicable), and optional optimization results page; ready to email to leadership
 
 ### Tab 5: Optimization & Recommendations
 
@@ -288,7 +313,7 @@ cpg_planning_tool/
 │   ├── ...                      # Allocation, spatial, scenario, optimizer, explainer
 │   └── pdf_report_generator.py  # PDF boardroom report (reportlab)
 ├── tabs/                        # All 6 UI tabs
-├── components/                  # Sidebar, charts, metric cards, tables
+├── components/                  # Sidebar, charts, metric cards, tables, floor map
 ├── tests/                       # Unit tests (pytest)
 ├── docs/                        # Executive summary and documentation
 └── sample_files/                # Pre-generated CSV and Excel files for testing

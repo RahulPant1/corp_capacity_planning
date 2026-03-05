@@ -6,6 +6,7 @@ import pandas as pd
 from data.session_store import get_active_scenario, get_floors, is_data_loaded
 from engine.spatial import get_floor_utilization, get_consolidation_suggestions
 from components.charts import floor_heatmap, unit_floor_heatmap
+from components.floor_map import render_floor_map_grid
 from config.defaults import FLOOR_SATURATION_THRESHOLD, FLOOR_SURPLUS_THRESHOLD
 
 
@@ -35,54 +36,91 @@ def render(sidebar_state):
 
     tower_filter = selected_tower if selected_tower != "All" else None
 
-    # --- Floor Utilization Chart ---
-    col1, col2 = st.columns([3, 2])
+    # --- View Mode Toggle ---
+    view_mode = st.radio(
+        "View Mode",
+        ["Charts", "Floor Map"],
+        horizontal=True,
+        key="spatial_view_mode",
+    )
 
-    with col1:
-        fig = floor_heatmap(floor_util, tower_filter)
-        st.plotly_chart(fig, use_container_width=True)
+    if view_mode == "Floor Map":
+        # --- Floor Map View ---
+        st.subheader("Floor Allocation Map")
+        st.caption("Each block represents a unit's seat allocation on the floor. Grey = available capacity.")
 
-    with col2:
-        # Summary stats
-        filtered_util = floor_util
+        # Build per-floor assignment data
+        floor_map_data = {}
+        floor_lookup = {f.floor_id: f for f in floors}
+        for a in assignments:
+            fid = f"{a.tower_id}-F{a.floor_number}"
+            if tower_filter and not fid.startswith(tower_filter):
+                continue
+            if fid not in floor_map_data:
+                f_obj = floor_lookup.get(fid)
+                floor_map_data[fid] = {
+                    "total_seats": f_obj.total_seats if f_obj else 0,
+                    "assignments": [],
+                }
+            floor_map_data[fid]["assignments"].append({
+                "unit_name": a.unit_name,
+                "seats_assigned": a.seats_assigned,
+            })
+
+        if floor_map_data:
+            render_floor_map_grid(floor_map_data, columns=2)
+        else:
+            st.info("No floor assignments to display.")
+
+    else:
+        # --- Chart View (existing) ---
+        col1, col2 = st.columns([3, 2])
+
+        with col1:
+            fig = floor_heatmap(floor_util, tower_filter)
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            # Summary stats
+            filtered_util = floor_util
+            if tower_filter:
+                filtered_util = [f for f in floor_util if f["tower_id"] == tower_filter]
+
+            total = sum(f["total_seats"] for f in filtered_util)
+            used = sum(f["used_seats"] for f in filtered_util)
+
+            st.metric("Total Seats", f"{total:,}")
+            st.metric("Used Seats", f"{used:,}")
+            st.metric("Utilization", f"{used/total:.1%}" if total > 0 else "N/A")
+
+            saturated = sum(1 for f in filtered_util if f["utilization_pct"] > FLOOR_SATURATION_THRESHOLD)
+            surplus = sum(1 for f in filtered_util if f["utilization_pct"] < FLOOR_SURPLUS_THRESHOLD)
+            st.metric("Saturated Floors (>90%)", saturated)
+            st.metric("Surplus Floors (<80%)", surplus)
+
+        st.divider()
+
+        # --- Unit x Floor Heatmap ---
+        st.subheader("Unit Distribution by Floor")
+
+        # Prepare assignment data for heatmap
+        assignment_dicts = [{
+            "tower_id": a.tower_id,
+            "floor_number": a.floor_number,
+            "unit_name": a.unit_name,
+            "seats_assigned": a.seats_assigned,
+        } for a in assignments]
+
+        floor_ids = sorted(set(f.floor_id for f in floors))
+        unit_names = sorted(set(a.unit_name for a in assignments))
+
         if tower_filter:
-            filtered_util = [f for f in floor_util if f["tower_id"] == tower_filter]
+            floor_ids = [fid for fid in floor_ids if fid.startswith(tower_filter)]
+            assignment_dicts = [a for a in assignment_dicts if a["tower_id"] == tower_filter]
 
-        total = sum(f["total_seats"] for f in filtered_util)
-        used = sum(f["used_seats"] for f in filtered_util)
-
-        st.metric("Total Seats", f"{total:,}")
-        st.metric("Used Seats", f"{used:,}")
-        st.metric("Utilization", f"{used/total:.1%}" if total > 0 else "N/A")
-
-        saturated = sum(1 for f in filtered_util if f["utilization_pct"] > FLOOR_SATURATION_THRESHOLD)
-        surplus = sum(1 for f in filtered_util if f["utilization_pct"] < FLOOR_SURPLUS_THRESHOLD)
-        st.metric("Saturated Floors (>90%)", saturated)
-        st.metric("Surplus Floors (<80%)", surplus)
-
-    st.divider()
-
-    # --- Unit x Floor Heatmap ---
-    st.subheader("Unit Distribution by Floor")
-
-    # Prepare assignment data for heatmap
-    assignment_dicts = [{
-        "tower_id": a.tower_id,
-        "floor_number": a.floor_number,
-        "unit_name": a.unit_name,
-        "seats_assigned": a.seats_assigned,
-    } for a in assignments]
-
-    floor_ids = sorted(set(f.floor_id for f in floors))
-    unit_names = sorted(set(a.unit_name for a in assignments))
-
-    if tower_filter:
-        floor_ids = [fid for fid in floor_ids if fid.startswith(tower_filter)]
-        assignment_dicts = [a for a in assignment_dicts if a["tower_id"] == tower_filter]
-
-    if assignment_dicts and floor_ids and unit_names:
-        fig = unit_floor_heatmap(assignment_dicts, floor_ids, unit_names)
-        st.plotly_chart(fig, use_container_width=True)
+        if assignment_dicts and floor_ids and unit_names:
+            fig = unit_floor_heatmap(assignment_dicts, floor_ids, unit_names)
+            st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
 

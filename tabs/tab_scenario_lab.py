@@ -360,13 +360,20 @@ def render(sidebar_state):
             if (a.seat_gap / a.effective_demand_seats if a.effective_demand_seats else 0)
             < RISK_AMBER_GAP_PCT
         )
-        m1, m2, m3, m4 = st.columns(4)
+        _total_hot_seat_savings = sum(a.hot_seat_savings for a in allocs)
+        if _total_hot_seat_savings > 0:
+            m1, m2, m3, m4, m5 = st.columns(5)
+        else:
+            m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total Demand", f"{_total_demand:,}")
         m2.metric("Total Allocated", f"{_total_alloc:,}")
         m3.metric("Net Gap", f"{_net_gap:+,}",
                   delta_color="normal" if _net_gap >= 0 else "inverse")
         m4.metric("Units at Risk", str(_at_risk),
                   delta_color="inverse" if _at_risk > 0 else "normal")
+        if _total_hot_seat_savings > 0:
+            m5.metric("Hot-Seat Savings", f"{_total_hot_seat_savings:,}",
+                      help="Seats saved via night-shift hot-seating (day/night desk sharing)")
 
         # Compute RTO data for table enrichment
         att_profiles = get_attendance()

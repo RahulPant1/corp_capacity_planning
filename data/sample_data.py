@@ -27,14 +27,14 @@ def generate_buildings_df() -> pd.DataFrame:
 def generate_units_df() -> pd.DataFrame:
     """Generate unit headcount & forecast data for 8 business units."""
     profiles = [
-        {"Unit Name": "Engineering",  "Current Total Headcount": 400, "HC Growth Forecast (%)": 15, "Business Priority": "High"},
-        {"Unit Name": "Product",      "Current Total Headcount": 150, "HC Growth Forecast (%)": 10, "Business Priority": "High"},
-        {"Unit Name": "Sales",        "Current Total Headcount": 300, "HC Growth Forecast (%)": 5,  "Business Priority": "High"},
-        {"Unit Name": "Marketing",    "Current Total Headcount": 120, "HC Growth Forecast (%)": 8,  "Business Priority": "High"},
-        {"Unit Name": "Finance",      "Current Total Headcount": 80,  "HC Growth Forecast (%)": 2,  "Business Priority": "High"},
-        {"Unit Name": "HR",           "Current Total Headcount": 60,  "HC Growth Forecast (%)": 3,  "Business Priority": "High"},
-        {"Unit Name": "Legal",        "Current Total Headcount": 40,  "HC Growth Forecast (%)": 1,  "Business Priority": "High"},
-        {"Unit Name": "Operations",   "Current Total Headcount": 200, "HC Growth Forecast (%)": -5, "Business Priority": "High"},
+        {"Unit Name": "Engineering",  "Current Total Headcount": 400, "HC Growth Forecast (%)": 15, "Business Priority": "High", "Night Shift %": 10},
+        {"Unit Name": "Product",      "Current Total Headcount": 150, "HC Growth Forecast (%)": 10, "Business Priority": "High", "Night Shift %": 0},
+        {"Unit Name": "Sales",        "Current Total Headcount": 300, "HC Growth Forecast (%)": 5,  "Business Priority": "High", "Night Shift %": 5},
+        {"Unit Name": "Marketing",    "Current Total Headcount": 120, "HC Growth Forecast (%)": 8,  "Business Priority": "High", "Night Shift %": 0},
+        {"Unit Name": "Finance",      "Current Total Headcount": 80,  "HC Growth Forecast (%)": 2,  "Business Priority": "High", "Night Shift %": 0},
+        {"Unit Name": "HR",           "Current Total Headcount": 60,  "HC Growth Forecast (%)": 3,  "Business Priority": "High", "Night Shift %": 0},
+        {"Unit Name": "Legal",        "Current Total Headcount": 40,  "HC Growth Forecast (%)": 1,  "Business Priority": "High", "Night Shift %": 0},
+        {"Unit Name": "Operations",   "Current Total Headcount": 200, "HC Growth Forecast (%)": -5, "Business Priority": "High", "Night Shift %": 30},
     ]
     return pd.DataFrame(profiles)
 

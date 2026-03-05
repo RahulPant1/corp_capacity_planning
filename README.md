@@ -170,6 +170,8 @@ Detailed per-unit analysis. **🔴/🟡/🟢 count metric cards** above the tabl
 
 A legend caption below the table explains Fragmentation, RTO Status, and Gap % definitions.
 
+**Attendance Anomalies** *(expander)* — AI feature that flags units with statistically unusual attendance patterns (see [AI Features](#ai-features))
+
 ### Tab 3: Spatial / Floor View
 
 Physical seat utilization across towers and floors. Two view modes via toggle:
@@ -187,6 +189,7 @@ Physical seat utilization across towers and floors. Two view modes via toggle:
 Both views share:
 - Floor detail table showing **Largest Unit (N seats)** per floor
 - Building spread analysis and consolidation suggestions for fragmented units
+- **Co-location Recommendations** *(expander)* — AI feature that scores every unit pair for floor-sharing compatibility (see [AI Features](#ai-features))
 
 ### Tab 4: Scenario Lab
 
@@ -219,6 +222,7 @@ After simulation, the Scenario Lab shows:
   - *How is Allocation % calculated?* — expandable formula with step-by-step walkthrough
 - **Scenario Impact Summary** — overall stats, RTO Need explanation, per-unit highlights, key risks
 - **Changes vs Baseline** — automatic comparison with side-by-side table and chart
+- **Sensitivity Analysis** *(expander)* — AI feature that auto-varies key planning parameters to rank which levers impact seat gap most (see [AI Features](#ai-features))
 - **Download Report** — two formats side by side:
   - **Excel (.xlsx)** — allocation, floor assignments, risks, optimization run
   - **PDF Boardroom Report (.pdf)** — professional multi-page report with: rule-based executive summary brief (no AI), color-coded tables (RED/AMBER/GREEN), KPI summary, floor utilization maps (treemap charts), floor assignments, risk narrative, hot-seating savings (if applicable), and optional optimization results page; ready to email to leadership
@@ -298,6 +302,124 @@ Adjustable in **Admin > Rule Configuration**.
 
 ---
 
+## AI Features
+
+Three analytical AI features are built into the platform — no external API or internet connection required. All computation runs locally using numpy.
+
+---
+
+### 1. Smart Unit Co-location Scoring *(Spatial / Floor View tab)*
+
+**What it does:** Ranks every unit pair by how compatible they are for sharing a floor, based on 5 planning dimensions. Helps real estate teams make deliberate co-location decisions rather than arbitrary placements.
+
+**How it works:**
+1. Build a feature vector per unit: team size (HC), growth rate, night shift %, RTO days/week, business priority
+2. Min-max normalize each dimension to [0, 1] across all units — so a 400-person team and an 80-person team are comparable
+3. For each unit pair: compute per-dimension similarity as `1 − |normalized_diff|`
+4. Weighted sum gives the final affinity score (0–1, higher = better match)
+5. Reasoning only references **discriminating dimensions** — those with actual variance across units. If all units have 0% night shift, shift is not cited in the explanation since it distinguishes nothing.
+
+**Default dimension weights:**
+
+| Dimension | Weight | Why |
+|-----------|--------|-----|
+| Team Size | 20% | Similar-sized teams fit more cleanly onto the same floors |
+| Growth Rate | 20% | Matching growth trajectories reduces future re-shuffling |
+| Shift Pattern | 20% | Units with shared shift profiles have less desk contention |
+| RTO Frequency | 25% | Peak in-office days drive desk demand — mismatched RTO creates crowding |
+| Business Priority | 15% | Co-locating same-priority units simplifies scarcity trade-offs |
+
+**What you see:**
+- Co-location affinity heatmap (all unit pairs)
+- Top 10 recommended pairs with score and reasoning (e.g. *"Well-matched on RTO frequency (3.0 vs 2.8 RTO days/wk); notable gap on team size (400 vs 80 HC)"*)
+- Currently co-located units per floor
+- **Mismatch alerts** — units already sharing a floor but with low affinity score (<35%)
+
+**PDF report:** Co-location Suggestions page with top pair table and mismatch flags.
+
+---
+
+### 2. What-If Sensitivity Analysis *(Scenario Lab tab)*
+
+**What it does:** Automatically identifies which planning levers have the biggest impact on your seat supply–demand gap. Answers: *"Should I focus on adjusting allocation %, the planning horizon, or the RTO mandate?"*
+
+**How it works:**
+1. Takes the current scenario as baseline and runs the full allocation pipeline to get a reference seat gap
+2. Varies one parameter at a time (classic one-at-a-time sensitivity method), keeping all others fixed
+3. Re-runs the full allocation pipeline for each variation and records the resulting gap
+4. Ranks all variations by absolute impact on seat gap
+
+**Parameters tested:**
+
+| Parameter | Variations |
+|-----------|-----------|
+| Global Allocation % | −10%, −5%, +5%, +10% from current |
+| Planning Horizon | −6 months, −3 months, +3 months, +6 months |
+| Capacity Reduction | 0%, 5%, 10%, 15% of total floor capacity |
+| RTO Mandate | −1.0, −0.5, +0.5, +1.0 days/week |
+
+**What you see:**
+- **Tornado chart** — horizontal bars sorted by impact magnitude; green = tightens gap, red = widens gap
+- **Parameter impact ranking table** — which parameter has the widest swing across its tested range
+- **Detailed results table** (expandable) — every variation with before/after gap values
+
+> **Note:** Each click runs ~16 full allocation simulations. Expect 2–5 seconds for typical datasets.
+
+---
+
+### 3. Attendance Anomaly Detection *(Unit Impact View tab + Executive Dashboard)*
+
+**What it does:** Flags units with statistically unusual attendance patterns that may indicate bad planning assumptions, data quality issues, or significant hot-desking opportunities. Uses z-scores so results adapt to your specific dataset.
+
+**How it works:**
+1. Compute 3 metrics per unit from the attendance data
+2. Calculate the z-score for each metric: `(value − mean) / std_dev`
+3. Flag any unit where a metric is more than **2 standard deviations** from the group mean
+4. Requires at least 3 units with attendance data for meaningful statistics
+
+**Metrics checked:**
+
+| Metric | What it flags | Anomaly direction |
+|--------|--------------|-------------------|
+| **Peak-to-Median Ratio** | How spiky is attendance? | High = very spiky (buffer risk); Low = very flat |
+| **Avg RTO Days/Week** | How often does the unit come in? | High = always in office (check if over-seated); Low = rarely in (hot-desk candidate) |
+| **Median HC / Current HC** | Does attendance match headcount? | High = more people in office than HC suggests; Low = possible data quality issue |
+
+**What you see:**
+- Table of flagged units with metric, actual value, z-score, anomaly type, and recommendation
+- Z-score coloring: amber = 2–3σ, red = >3σ
+- Anomaly count surfaced in the Executive Dashboard **Other Alerts** card
+
+**PDF report:** Attendance Anomalies page with color-coded rows.
+
+---
+
+### Configuring AI Feature Thresholds
+
+All AI feature parameters are in `config/defaults.py`:
+
+```python
+# Co-location scoring weights (must sum to 1.0)
+COLOCATION_WEIGHT_SIZE = 0.20
+COLOCATION_WEIGHT_GROWTH = 0.20
+COLOCATION_WEIGHT_SHIFT = 0.20
+COLOCATION_WEIGHT_RTO = 0.25
+COLOCATION_WEIGHT_PRIORITY = 0.15
+COLOCATION_TOP_PAIRS = 10           # Max pairs shown in UI and PDF
+
+# Sensitivity analysis parameter ranges
+SENSITIVITY_ALLOC_VARIATIONS = [-0.10, -0.05, 0.05, 0.10]
+SENSITIVITY_HORIZON_VARIATIONS = [-6, -3, 3, 6]
+SENSITIVITY_CAPACITY_REDUCTIONS = [0.0, 0.05, 0.10, 0.15]
+SENSITIVITY_RTO_VARIATIONS = [-1.0, -0.5, 0.5, 1.0]
+
+# Anomaly detection
+ANOMALY_Z_SCORE_THRESHOLD = 2.0    # Standard deviations to flag
+ANOMALY_MIN_UNITS = 3              # Minimum units required for z-scores
+```
+
+---
+
 ## Project Structure
 
 ```
@@ -310,7 +432,15 @@ cpg_planning_tool/
 ├── models/                      # Data models (Floor, Unit, Scenario, etc.)
 ├── data/                        # File loader, validator, session store, sample data
 ├── engine/
-│   ├── ...                      # Allocation, spatial, scenario, optimizer, explainer
+│   ├── allocation_engine.py     # Seat demand computation and scarcity redistribution
+│   ├── optimizer.py             # LP-based floor assignment (PuLP)
+│   ├── scenario_engine.py       # Scenario cloning, override application, simulation pipeline
+│   ├── spatial.py               # Floor scoring, adjacency, fragmentation
+│   ├── explainer.py             # Human-readable allocation explanation steps
+│   ├── colocation.py            # AI: pairwise unit co-location affinity scoring
+│   ├── sensitivity.py           # AI: one-at-a-time parameter sensitivity analysis
+│   ├── anomaly.py               # AI: z-score attendance anomaly detection
+│   ├── report_generator.py      # Excel report export
 │   └── pdf_report_generator.py  # PDF boardroom report (reportlab)
 ├── tabs/                        # All 6 UI tabs
 ├── components/                  # Sidebar, charts, metric cards, tables, floor map

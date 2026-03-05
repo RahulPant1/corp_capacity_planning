@@ -141,7 +141,8 @@ def render(sidebar_state):
             pin_rows = []
             saved_pins = st.session_state.get("opt_pin_selections", {})
             for uname in unit_names:
-                default = saved_pins.get(uname, tower_ids)
+                saved = saved_pins.get(uname, tower_ids)
+                default = [t for t in saved if t in tower_ids] or tower_ids
                 selected = st.multiselect(
                     uname, options=tower_ids, default=default,
                     key=f"opt_pin_{uname}",

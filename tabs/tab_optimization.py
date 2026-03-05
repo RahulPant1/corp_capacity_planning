@@ -1,4 +1,4 @@
-"""Tab 5: Optimization & Recommendations — LP-based best-fit allocations."""
+"""Tab 5: What-If Analysis — planning what-if, LP floor placement, and AI insights."""
 
 import streamlit as st
 import pandas as pd
@@ -10,14 +10,15 @@ from data.session_store import (
     update_scenario, add_audit_entry, is_data_loaded,
 )
 from engine.optimizer import optimize_allocation
-from engine.scenario_engine import apply_floor_modifications, apply_overrides
+from engine.scenario_engine import apply_floor_modifications, apply_overrides, run_scenario
 from components.tables import render_comparison_table
 from config.defaults import PLANNING_BUFFER_PRESETS
+from models.scenario import ScenarioParams
 
 
 def render(sidebar_state):
-    """Render the Optimization & Recommendations tab."""
-    st.header("Optimization & Recommendations")
+    """Render the What-If Analysis tab."""
+    st.header("What-If Analysis")
 
     # --- How it works callout ---
     with st.expander("How does Optimization relate to Simulation?", expanded=False):
@@ -60,8 +61,98 @@ def render(sidebar_state):
     att_map_raw = {a.unit_name: a for a in att_profiles}
     _, scenario_att_map = apply_overrides(units, att_map_raw, scenario)
 
-    # --- Objective Selection ---
-    st.subheader("Optimization Objective")
+    # --- Planning What-If ---
+    st.subheader("Planning What-If")
+    st.caption(
+        "Adjust planning parameters and see how the total seat gap changes vs the current baseline. "
+        "Use **Apply to Scenario** to lock in the changes and refresh all views."
+    )
+
+    rule_config_wi = get_rule_config()
+    wi_col1, wi_col2 = st.columns(2)
+    with wi_col1:
+        wi_alloc_pct = st.slider(
+            "Global Alloc %",
+            min_value=50, max_value=150,
+            value=int(rule_config_wi.get("global_alloc_pct", 0.80) * 100),
+            step=5, format="%d%%",
+            key="wi_alloc",
+            help="Seats allocated as % of projected headcount. Directly drives seat demand.",
+        )
+    with wi_col2:
+        wi_cap_red_pct = st.slider(
+            "Capacity Reduction %",
+            min_value=0, max_value=30,
+            value=int((scenario.params.capacity_reduction_pct or 0.0) * 100),
+            step=5, format="%d%%",
+            key="wi_capred",
+            help="Effective floor capacity removed (e.g. social distancing buffer).",
+        )
+
+    wi_rto = st.slider(
+        "Global RTO Mandate (days/week)",
+        min_value=0.5, max_value=5.0,
+        value=float(scenario.params.global_rto_mandate_days or 3.0),
+        step=0.5,
+        key="wi_rto",
+        help=(
+            "Raises the minimum RTO attendance floor for all units. Affects RTO compliance — "
+            "has limited impact on seat gap in standard allocation mode but significant "
+            "for RTO-Based optimization objectives."
+        ),
+    )
+
+    wi_run_col, wi_apply_col = st.columns([1, 1])
+    with wi_run_col:
+        if st.button("Run What-If", key="btn_wi_run"):
+            from engine.sensitivity import run_single_what_if
+            with st.spinner("Running what-if..."):
+                wi_result = run_single_what_if(
+                    scenario, units, att_map_raw, floors, rule_config_wi,
+                    alloc_pct=wi_alloc_pct / 100.0,
+                    capacity_reduction=wi_cap_red_pct / 100.0,
+                    rto_mandate=wi_rto,
+                )
+            st.session_state[f"wi_result_{scenario.scenario_id}"] = wi_result
+
+    stored_wi = st.session_state.get(f"wi_result_{scenario.scenario_id}")
+    if stored_wi:
+        delta = stored_wi["gap_delta"]
+        mc1, mc2, mc3 = st.columns(3)
+        mc1.metric("Baseline Gap", f"{stored_wi['baseline_gap']:,} seats")
+        mc2.metric("What-If Gap",  f"{stored_wi['result_gap']:,} seats")
+        mc3.metric("Change", f"{delta:+,} seats", delta=str(delta), delta_color="inverse")
+
+        if delta == 0:
+            st.info("No seat gap change under these parameters.")
+        elif delta < 0:
+            st.success(f"Seat gap reduced by {abs(delta):,} seats.")
+        else:
+            st.warning(f"Seat gap increases by {delta:,} seats.")
+
+        with wi_apply_col:
+            if st.button("Apply to Scenario", type="primary", key="btn_wi_apply"):
+                rc = dict(rule_config_wi)
+                rc["global_alloc_pct"] = wi_alloc_pct / 100.0
+                st.session_state["rule_config"] = rc
+                scenario.params = ScenarioParams(
+                    global_rto_mandate_days=wi_rto if wi_rto > 0 else None,
+                    capacity_reduction_pct=wi_cap_red_pct / 100.0,
+                    excluded_floors=scenario.params.excluded_floors,
+                )
+                scenario = run_scenario(scenario, units, att_map_raw, effective_floors, rc)
+                update_scenario(scenario)
+                st.session_state.pop(f"wi_result_{scenario.scenario_id}", None)
+                st.success(
+                    f"Applied: Alloc {wi_alloc_pct}%, Cap Reduction {wi_cap_red_pct}%, "
+                    f"RTO {wi_rto}d/wk. All tabs now reflect the updated scenario."
+                )
+                st.rerun()
+
+    st.divider()
+
+    # --- Floor Placement Optimizer ---
+    st.subheader("Floor Placement Optimizer")
 
     objectives = {
         "optimal_placement": "Optimal Placement — seat everyone per allocation rule on fewest floors",
@@ -388,3 +479,89 @@ def render(sidebar_state):
                 st.rerun()
         else:
             st.warning("Cannot apply — scenario is locked.")
+
+    st.divider()
+
+    # --- Co-location Insights ---
+    with st.expander("Co-location Insights", expanded=True):
+        st.caption(
+            "Which units are best suited to share a floor? "
+            "Scored on team size, growth rate, shift patterns, RTO frequency, and business priority."
+        )
+        from engine.colocation import (
+            compute_colocation_scores, get_current_colocations, flag_colocation_mismatches,
+        )
+        from components.charts import colocation_heatmap
+
+        att_profiles_coloc = get_attendance()
+        att_map_coloc = {a.unit_name: a for a in att_profiles_coloc}
+
+        if len(units) < 2:
+            st.info("Need at least 2 units to compute co-location scores.")
+        else:
+            coloc_scores = compute_colocation_scores(units, att_map_coloc)
+            if coloc_scores:
+                fig_coloc = colocation_heatmap(coloc_scores)
+                st.plotly_chart(fig_coloc, use_container_width=True)
+
+                st.markdown("**Top Co-location Pairs:**")
+                pair_rows = [
+                    {
+                        "Unit A": s["unit_a"], "Unit B": s["unit_b"],
+                        "Score": f"{s['score']:.0%}", "Reasoning": s["reasoning"],
+                    }
+                    for s in coloc_scores[:10]
+                ]
+                st.dataframe(pd.DataFrame(pair_rows), use_container_width=True, hide_index=True)
+
+            current_coloc = get_current_colocations(scenario.floor_assignments)
+            if current_coloc:
+                st.markdown("**Currently Co-located Units:**")
+                for c in current_coloc:
+                    st.markdown(
+                        f"- **{c['floor_id']}**: {', '.join(c['units'])} ({c['unit_count']} units)"
+                    )
+
+                if coloc_scores:
+                    mismatches = flag_colocation_mismatches(current_coloc, coloc_scores)
+                    if mismatches:
+                        st.markdown("**Mismatch Alerts:**")
+                        for m in mismatches:
+                            st.warning(
+                                f"**{m['floor_id']}**: {m['unit_a']} + {m['unit_b']} "
+                                f"(affinity {m['score']:.0%}) — {m['flag_reason']}"
+                            )
+
+    st.divider()
+
+    # --- Attendance Anomalies ---
+    with st.expander("Attendance Anomalies", expanded=True):
+        st.caption(
+            "Flags units with statistically unusual attendance patterns using z-scores. "
+            "Units more than 2 standard deviations from the mean on any metric are flagged."
+        )
+        from engine.anomaly import detect_attendance_anomalies
+
+        att_profiles_anom = get_attendance()
+        att_map_anom = {a.unit_name: a for a in att_profiles_anom}
+        anomalies_wi = detect_attendance_anomalies(units, att_map_anom)
+
+        if anomalies_wi:
+            anom_rows = [
+                {
+                    "Unit": a["unit_name"],
+                    "Metric": a["metric"],
+                    "Value": a["value"],
+                    "Z-Score": a["z_score"],
+                    "Anomaly Type": a["anomaly_type"],
+                    "Recommendation": a["recommendation"],
+                }
+                for a in anomalies_wi
+            ]
+            st.dataframe(pd.DataFrame(anom_rows), use_container_width=True, hide_index=True)
+            st.markdown(
+                f"**{len(anomalies_wi)} anomalies detected** across "
+                f"{len(set(a['unit_name'] for a in anomalies_wi))} unit(s)."
+            )
+        else:
+            st.success("No attendance anomalies detected — all units within normal ranges.")

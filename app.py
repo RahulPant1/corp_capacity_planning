@@ -60,7 +60,7 @@ footer { display: none !important; }
         "👥 Unit Impact View",
         "🏗️ Spatial / Floor View",
         "🧪 Scenario Lab",
-        "⚡ Optimization",
+        "🤖 What-If Analysis",
         "⚙️ Admin",
     ])
 

@@ -174,9 +174,11 @@ def run_single_what_if(
     baseline = copy.deepcopy(base_scenario)
     baseline = run_scenario(baseline, units, attendance_map, floors, rule_config or {})
     baseline_gap = _compute_total_gap(baseline)
+    baseline_demand = sum(a.effective_demand_seats for a in baseline.allocation_results)
 
     test = run_scenario(test, units, attendance_map, floors, cfg)
     result_gap = _compute_total_gap(test)
+    result_demand = sum(a.effective_demand_seats for a in test.allocation_results)
 
     changed = {
         k: v for k, v in {
@@ -189,7 +191,10 @@ def run_single_what_if(
 
     return {
         "baseline_gap": baseline_gap,
+        "baseline_demand": baseline_demand,
         "result_gap": result_gap,
+        "result_demand": result_demand,
+        "demand_delta": result_demand - baseline_demand,
         "gap_delta": result_gap - baseline_gap,
         "changed_params": changed,
     }

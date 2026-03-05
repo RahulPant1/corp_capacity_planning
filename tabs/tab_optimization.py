@@ -117,18 +117,39 @@ def render(sidebar_state):
 
     stored_wi = st.session_state.get(f"wi_result_{scenario.scenario_id}")
     if stored_wi:
-        delta = stored_wi["gap_delta"]
-        mc1, mc2, mc3 = st.columns(3)
-        mc1.metric("Baseline Gap", f"{stored_wi['baseline_gap']:,} seats")
-        mc2.metric("What-If Gap",  f"{stored_wi['result_gap']:,} seats")
-        mc3.metric("Change", f"{delta:+,} seats", delta=str(delta), delta_color="inverse")
+        demand_delta = stored_wi.get("demand_delta", 0)
+        gap_delta = stored_wi["gap_delta"]
 
-        if delta == 0:
-            st.info("No seat gap change under these parameters.")
-        elif delta < 0:
-            st.success(f"Seat gap reduced by {abs(delta):,} seats.")
+        # Row 1: Seat demand (most sensitive to alloc % changes)
+        st.markdown("**Seat Demand**")
+        d1, d2, d3 = st.columns(3)
+        d1.metric("Baseline Demand", f"{stored_wi.get('baseline_demand', 0):,} seats")
+        d2.metric("What-If Demand",  f"{stored_wi.get('result_demand', 0):,} seats")
+        d3.metric("Demand Change", f"{demand_delta:+,} seats",
+                  delta=str(demand_delta), delta_color="inverse")
+
+        # Row 2: Seat gap (sensitive to capacity reduction / RTO changes)
+        st.markdown("**Seat Gap** (allocated − demand; 0 = fully satisfied)")
+        g1, g2, g3 = st.columns(3)
+        g1.metric("Baseline Gap", f"{stored_wi['baseline_gap']:,} seats")
+        g2.metric("What-If Gap",  f"{stored_wi['result_gap']:,} seats")
+        g3.metric("Gap Change", f"{gap_delta:+,} seats",
+                  delta=str(gap_delta), delta_color="inverse")
+
+        # Contextual message
+        if demand_delta == 0 and gap_delta == 0:
+            st.info("No change in demand or gap — parameters match the current baseline.")
+        elif demand_delta != 0 and gap_delta == 0:
+            direction = "more" if demand_delta > 0 else "fewer"
+            st.info(
+                f"Seat demand changes by **{demand_delta:+,} seats** ({direction} seats needed), "
+                f"but the gap stays at {stored_wi['result_gap']:,} — the building has enough "
+                f"capacity to absorb the change. Use **Apply to Scenario** to lock in the new demand plan."
+            )
+        elif gap_delta < 0:
+            st.success(f"Seat gap reduced by {abs(gap_delta):,} seats.")
         else:
-            st.warning(f"Seat gap increases by {delta:,} seats.")
+            st.warning(f"Seat gap increases by {gap_delta:,} seats.")
 
         with wi_apply_col:
             if st.button("Apply to Scenario", type="primary", key="btn_wi_apply"):

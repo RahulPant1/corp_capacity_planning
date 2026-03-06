@@ -99,6 +99,53 @@ def validate_attendance(df: pd.DataFrame) -> ValidationResult:
     return result
 
 
+DAILY_ATTENDANCE_REQUIRED_COLUMNS = [
+    "Date",
+    "Unit Name",
+    "In-Office Count",
+]
+
+
+def validate_daily_attendance(df: pd.DataFrame) -> ValidationResult:
+    """Validate daily attendance data."""
+    result = _check_required_columns(df, DAILY_ATTENDANCE_REQUIRED_COLUMNS, "Daily Attendance")
+    if not result.is_valid:
+        return result
+
+    try:
+        pd.to_datetime(df["Date"])
+    except Exception:
+        result.is_valid = False
+        result.errors.append("Daily Attendance: 'Date' column contains unparseable dates.")
+
+    if (pd.to_numeric(df["In-Office Count"], errors="coerce") < 0).any():
+        result.is_valid = False
+        result.errors.append("Daily Attendance: In-Office Count cannot be negative.")
+
+    if len(df["Date"].unique()) < 30:
+        result.warnings.append(
+            "Daily Attendance: Fewer than 30 unique dates. "
+            "Forecasting accuracy may be limited."
+        )
+
+    return result
+
+
+def validate_daily_attendance_cross(daily_df: pd.DataFrame, units_df: pd.DataFrame) -> ValidationResult:
+    """Check that daily attendance unit names match loaded units."""
+    result = ValidationResult()
+    daily_names = set(daily_df["Unit Name"].str.strip())
+    unit_names = set(units_df["Unit Name"].str.strip()) if "Unit Name" in units_df.columns else set()
+
+    missing = daily_names - unit_names
+    if missing:
+        result.warnings.append(
+            f"Daily attendance has data for unknown units: {', '.join(sorted(missing))}. "
+            "These will be ignored in forecasting."
+        )
+    return result
+
+
 def validate_cross_file(units_df: pd.DataFrame, attendance_df: pd.DataFrame) -> ValidationResult:
     """Check that unit names match across files."""
     result = ValidationResult()

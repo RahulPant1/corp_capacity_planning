@@ -8,7 +8,7 @@ from models.unit import Unit
 from models.attendance import AttendanceProfile
 from models.building import Floor
 from models.scenario import Scenario
-from engine.scenario_engine import run_scenario
+from engine.scenario_engine import run_scenario, apply_floor_modifications
 from config.defaults import (
     SENSITIVITY_ALLOC_VARIATIONS,
     SENSITIVITY_HORIZON_VARIATIONS,
@@ -175,10 +175,14 @@ def run_single_what_if(
     baseline = run_scenario(baseline, units, attendance_map, floors, rule_config or {})
     baseline_gap = _compute_total_gap(baseline)
     baseline_demand = sum(a.effective_demand_seats for a in baseline.allocation_results)
+    baseline_eff_floors = apply_floor_modifications(floors, baseline)
+    baseline_capacity = sum(f.total_seats for f in baseline_eff_floors)
 
     test = run_scenario(test, units, attendance_map, floors, cfg)
     result_gap = _compute_total_gap(test)
     result_demand = sum(a.effective_demand_seats for a in test.allocation_results)
+    result_eff_floors = apply_floor_modifications(floors, test)
+    result_capacity = sum(f.total_seats for f in result_eff_floors)
 
     changed = {
         k: v for k, v in {
@@ -192,9 +196,14 @@ def run_single_what_if(
     return {
         "baseline_gap": baseline_gap,
         "baseline_demand": baseline_demand,
+        "baseline_capacity": baseline_capacity,
         "result_gap": result_gap,
         "result_demand": result_demand,
+        "result_capacity": result_capacity,
         "demand_delta": result_demand - baseline_demand,
         "gap_delta": result_gap - baseline_gap,
+        "capacity_delta": result_capacity - baseline_capacity,
+        "baseline_headroom": baseline_capacity - baseline_demand,
+        "result_headroom": result_capacity - result_demand,
         "changed_params": changed,
     }

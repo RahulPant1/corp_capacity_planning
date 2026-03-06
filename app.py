@@ -16,6 +16,7 @@ from tabs import (
     tab_scenario_lab,
     tab_optimization,
     tab_admin_governance,
+    tab_forecasting,
 )
 
 
@@ -42,9 +43,9 @@ div.block-container, div[data-testid="stMainBlockContainer"] {
 .stTabs [data-baseweb="tab-panel"] {
     padding-top: 0.5rem !important;
 }
-/* Smaller tab labels so all 6 fit in one row */
+/* Smaller tab labels so all 7 fit in one row */
 button[data-baseweb="tab"] {
-    font-size: 0.78rem !important;
+    font-size: 0.72rem !important;
     padding-left: 0.6rem !important;
     padding-right: 0.6rem !important;
 }
@@ -55,12 +56,13 @@ footer { display: none !important; }
 
     sidebar_state = render_sidebar()
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📊 Executive Dashboard",
         "👥 Unit Impact View",
         "🏗️ Spatial / Floor View",
         "🧪 Scenario Lab",
         "🤖 What-If Analysis",
+        "📈 Demand Forecasting",
         "⚙️ Admin",
     ])
 
@@ -75,6 +77,8 @@ footer { display: none !important; }
     with tab5:
         tab_optimization.render(sidebar_state)
     with tab6:
+        tab_forecasting.render(sidebar_state)
+    with tab7:
         tab_admin_governance.render(sidebar_state)
 
 

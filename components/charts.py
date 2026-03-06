@@ -235,3 +235,115 @@ def colocation_heatmap(
         yaxis_title="Unit",
     )
     return fig
+
+
+# ── Forecasting Charts ───────────────────────────────────────────────────
+
+def attendance_trend_chart(
+    historical_dates, historical_values,
+    ema_values,
+    forecast_dates, forecast_median, forecast_upper, forecast_lower,
+    unit_name: str,
+) -> go.Figure:
+    """Line chart with historical scatter, EMA, and forecast with CI bands."""
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=historical_dates, y=historical_values,
+        mode="markers", name="Actual",
+        marker=dict(size=3, color="#4A90D9", opacity=0.5),
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=historical_dates, y=ema_values,
+        mode="lines", name="EMA (21-day)",
+        line=dict(color="#4A90D9", width=2),
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=forecast_dates, y=forecast_median,
+        mode="lines", name="Forecast",
+        line=dict(color="#E8734A", width=2, dash="dash"),
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=list(forecast_dates) + list(forecast_dates[::-1]),
+        y=list(forecast_upper) + list(forecast_lower[::-1]),
+        fill="toself", fillcolor="rgba(232,115,74,0.15)",
+        line=dict(width=0), name="95% CI",
+    ))
+
+    fig.update_layout(
+        title=f"Attendance Trend & Forecast — {unit_name}",
+        xaxis_title="Date", yaxis_title="In-Office Count",
+        height=400, hovermode="x unified",
+    )
+    return fig
+
+
+def dow_heatmap_chart(
+    dow_df: pd.DataFrame,
+    title: str = "Day-of-Week Attendance Patterns",
+) -> go.Figure:
+    """Heatmap: units (y) x day-of-week (x), colored by median attendance."""
+    pivot = dow_df.pivot_table(
+        index="unit_name", columns="day_name", values="median_count",
+    )
+    day_order = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    pivot = pivot[[d for d in day_order if d in pivot.columns]]
+
+    fig = go.Figure(data=go.Heatmap(
+        z=pivot.values,
+        x=pivot.columns.tolist(),
+        y=pivot.index.tolist(),
+        colorscale="YlOrRd",
+        text=[[f"{v:.0f}" for v in row] for row in pivot.values],
+        texttemplate="%{text}",
+        hovertemplate="Unit: %{y}<br>Day: %{x}<br>Median: %{z:.0f}<extra></extra>",
+        colorbar=dict(title="Median"),
+    ))
+    fig.update_layout(title=title, height=max(300, len(pivot) * 45))
+    return fig
+
+
+def probabilistic_demand_bar(
+    demand_data: List[dict],
+    selected_confidence: float = 0.95,
+) -> go.Figure:
+    """Grouped bar: peak vs percentile-based demand per unit."""
+    units = [d["unit_name"] for d in demand_data]
+    peaks = [d["peak"] for d in demand_data]
+    percentile_vals = [d["percentiles"][selected_confidence] for d in demand_data]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name="Peak-Based", x=units, y=peaks, marker_color="#E8734A"))
+    fig.add_trace(go.Bar(
+        name=f"{selected_confidence:.0%} Percentile",
+        x=units, y=percentile_vals, marker_color="#4A90D9",
+    ))
+
+    fig.update_layout(
+        barmode="group",
+        title=f"Peak vs {selected_confidence:.0%} Percentile Demand",
+        xaxis_title="Unit", yaxis_title="Seats Needed",
+        height=400,
+    )
+    return fig
+
+
+def correlation_heatmap_chart(corr_df: pd.DataFrame) -> go.Figure:
+    """Heatmap of pairwise demand correlation between units."""
+    fig = go.Figure(data=go.Heatmap(
+        z=corr_df.values,
+        x=corr_df.columns.tolist(),
+        y=corr_df.index.tolist(),
+        colorscale="RdBu_r", zmid=0, zmin=-1, zmax=1,
+        text=[[f"{v:.2f}" for v in row] for row in corr_df.values],
+        texttemplate="%{text}",
+        colorbar=dict(title="Correlation"),
+    ))
+    fig.update_layout(
+        title="Demand Correlation Between Units",
+        height=max(400, len(corr_df) * 50),
+    )
+    return fig

@@ -79,6 +79,50 @@ def generate_sample_excel(output_dir: str):
         generate_attendance_df().to_excel(writer, sheet_name="Attendance", index=False)
 
 
+def generate_daily_attendance_df(days: int = 90, seed: int = 42) -> pd.DataFrame:
+    """Generate synthetic daily attendance data for all 8 sample units.
+
+    Simulates realistic patterns:
+    - Day-of-week effects (Tue/Wed peak, Mon/Fri low)
+    - Random noise
+    - Slight upward/downward trends per unit
+    """
+    import numpy as np
+    rng = np.random.RandomState(seed)
+
+    unit_base = {
+        "Engineering": 280, "Product": 105, "Sales": 180, "Marketing": 80,
+        "Finance": 55, "HR": 40, "Legal": 28, "Operations": 140,
+    }
+
+    dow_multipliers = {
+        0: 0.85,  # Monday
+        1: 1.05,  # Tuesday
+        2: 1.10,  # Wednesday
+        3: 1.00,  # Thursday
+        4: 0.75,  # Friday
+    }
+
+    start = pd.Timestamp("2025-07-01")
+    dates = pd.bdate_range(start, periods=days)  # Business days only
+
+    rows = []
+    for unit, base in unit_base.items():
+        trend_slope = rng.uniform(-0.3, 0.5)  # daily trend
+        for i, date in enumerate(dates):
+            dow = date.dayofweek
+            multiplier = dow_multipliers.get(dow, 1.0)
+            noise = rng.normal(0, base * 0.08)
+            count = max(0, round(base * multiplier + trend_slope * i + noise))
+            rows.append({
+                "Date": date.strftime("%Y-%m-%d"),
+                "Unit Name": unit,
+                "In-Office Count": count,
+            })
+
+    return pd.DataFrame(rows)
+
+
 if __name__ == "__main__":
     out = os.path.join(os.path.dirname(__file__), "..", "sample_files")
     generate_sample_csvs(out)

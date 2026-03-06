@@ -32,6 +32,8 @@ def initialize_session_state():
             "shrink_contribution_factor": 0.5,
             "rto_utilization_threshold": 0.20,
         },
+        "daily_attendance": [],
+        "daily_attendance_df": None,
         "sidebar_state": {
             "scenario_id": "baseline",
             "planning_horizon": 6,
@@ -75,6 +77,17 @@ def get_audit_log() -> List[AuditEntry]:
 
 def get_rule_config() -> dict:
     return st.session_state.get("rule_config", {})
+
+
+def get_daily_attendance_df():
+    """Get daily attendance DataFrame (or None if not loaded)."""
+    return st.session_state.get("daily_attendance_df")
+
+
+def set_daily_attendance(records: list, df):
+    """Store daily attendance records and DataFrame cache."""
+    st.session_state["daily_attendance"] = records
+    st.session_state["daily_attendance_df"] = df
 
 
 def is_data_loaded() -> bool:

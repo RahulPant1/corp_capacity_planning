@@ -32,6 +32,8 @@ The app opens at `http://localhost:8501`.
 2. Click **"Load Sample Data"** to load pre-built test data (2 buildings, 20 floors, 8 business units)
 3. Go to **Scenario Lab** and click **"Run Simulation"** to compute the baseline allocation
 4. Explore results across all tabs
+5. *(Optional)* Go to **Demand Forecasting** → click **"Generate Sample Data"** → explore attendance trends, probabilistic demand, and day-of-week patterns
+6. *(Optional)* Go to **What-If Analysis** → expand **"Scenario Comparison Matrix"** → auto-run multiple scenarios and pick the best
 
 ---
 
@@ -227,38 +229,96 @@ After simulation, the Scenario Lab shows:
   - **Excel (.xlsx)** — allocation, floor assignments, risks, optimization run
   - **PDF Boardroom Report (.pdf)** — professional multi-page report with: rule-based executive summary brief (no AI), color-coded tables (RED/AMBER/GREEN), KPI summary, floor utilization maps (treemap charts), floor assignments, risk narrative, hot-seating savings (if applicable), and optional optimization results page; ready to email to leadership
 
-### Tab 5: Optimization & Recommendations
+### Tab 5: What-If Analysis
 
-LP-based seat optimization using PuLP. **Run Simulation first** — Optimization places units on floors based on demand computed by Simulation.
+Unified planning + optimization tab. **Run Simulation in Scenario Lab first** — the optimizer places units on floors based on demand computed by Simulation.
 
-**Three objectives:**
-- **Optimal Placement** — seat everyone per allocation rule on fewest floors with maximum cohesion
-- **RTO-Based** — allocate by actual attendance patterns, free unused capacity. Shows seats saved and floors freed.
-- **What-If RTO** — simulate a different RTO policy (slider: 1-5 days/week)
+**Choose an optimization mode first** (drives which parameters are active):
 
-**Placement preference (all objectives):** The optimizer strongly prefers to keep each unit consolidated:
-1. **Same floor** (best) — unit stays on a single floor
-2. **Adjacent floors** — when spreading across 2+ floors, consecutive floors within the same tower are preferred over non-consecutive (e.g., floors 3 & 4 over floors 1 & 4)
-3. **Same tower** — before spreading to another tower
-4. **Same building** — before crossing to another building
-5. **Cross-building** — only when a single building genuinely lacks capacity; flagged with a warning in results
+| Mode | Demand basis | Alloc % used? | RTO slider |
+|------|-------------|---------------|-----------|
+| **Optimal Placement** | Headcount × Alloc % | Yes | Global RTO mandate |
+| **RTO-Based** | Actual attendance data | No (greyed out) | Not used (greyed out) |
+| **What-If RTO** | Attendance × target RTO | No (greyed out) | Target RTO level |
 
-**Scenario Settings in Effect** *(expander)* — shows active scenario-level constraints (RTO mandate, excluded floors, floor capacity) before running.
+Irrelevant sliders are **greyed out** based on the selected mode with a contextual explanation banner.
 
-**Runtime Constraints (Optional)** *(expander)* — applied at run time on top of the objective:
-- **Max Floors Per Unit** — cap how many floors any unit can spread across (e.g., max 2 floors); adjacent floors are always preferred within that budget
-- **Pin Units to Tower** — restrict specific units to a tower (e.g., Engineering stays in B1-T1)
-- **Minimum Seats Guarantee** — ensure every unit gets at least X% of their demand even under scarcity
+**Planning Parameters** (all in one row):
+- Global Alloc % (50–150%)
+- Global RTO Mandate / Target RTO (0.5–5.0 days/week)
+- Capacity Reduction % (0–30%)
 
-**Results include:**
-- **Policy-Based Seats (80% Rule)** vs **Attendance-Based Seats** summary metrics (RTO objectives)
-- Before/after seat and floor count comparison per unit; cross-building splits flagged with a warning
-- **Cost Estimation Panel** — enter $ per seat/year to see annual cost and savings in dollars
-- **Optimization History** — last 3 runs stored for comparison (objective, seats, floors used)
-- **Sensitivity Analysis** — auto-runs Lean/Balanced/Conservative buffer presets and shows seat demand range
-- "Accept & Apply" pushes results to Dashboard, Spatial View, and Unit Impact
+**Placement Controls:**
+- Max Floors Per Unit — cap how many floors any unit can spread across
+- Minimum Seat Guarantee — ensure every unit gets at least X% of demand under scarcity
 
-### Tab 6: Admin
+**Tower Restrictions** *(expander)* — pin specific units to chosen towers.
+
+**Single "Simulate & Optimize" button** runs the full pipeline: simulation → LP optimizer → results.
+
+**Combined Results Panel:**
+- **Planning Impact** — Demand, Available Capacity, and Headroom vs baseline (shown when params change)
+- **Optimization Status** — Optimal / Infeasible
+- **Savings Summary** *(RTO modes)* — Policy-Based vs Attendance-Based seats, seats saved, floors freed
+- **Before/After Comparison** — per-unit seats and floor count; cross-building splits flagged with warning
+- **Cost Estimation** *(expander)* — annual cost and savings in dollars at a configurable $/seat/year rate
+- **Consolidation Suggestions** — auto-generated opportunities
+- **Optimization History** — last 3 runs for comparison
+- **Accept & Apply** — commits demand params + floor assignments to active scenario; all other tabs update
+
+**Sensitivity Analysis** — runs Lean/Balanced/Conservative buffer presets in parallel and compares seat demand range.
+
+**Scenario Comparison Matrix** *(expander)* — automatically runs multiple parameter combinations and produces a ranked comparison report:
+- Select parameter values to test: Alloc % values, RTO mandate values, Capacity Reduction values, Optimization Mode
+- Live combination counter — blocked at 24 combinations max
+- **Run All N Scenarios** — runs every combination through the full simulation + optimizer pipeline
+- **Ranked results table** — all combinations sorted by composite score (headroom 35%, gap 35%, fragmentation 15%, consolidation 15%)
+- **Best Scenario** callout with plain-English explanation
+- **Demand/Capacity Chart** — grouped bar showing Demand, Capacity, Optimized Seats per scenario
+- **Metrics Heatmap** — normalized RdYlGn matrix of all KPIs across all runs (green = better)
+- **Adopt** any ranked scenario via dropdown → applies params + floor assignments to active scenario
+
+**AI Insights** *(expanders)*:
+- Co-location Insights — affinity heatmap, top pairs, mismatch alerts (see AI Features)
+- Attendance Anomalies — z-score anomaly detection (see AI Features)
+
+**Placement preference (all objectives):**
+1. Same floor (best)
+2. Adjacent floors within the same tower — preferred when spreading across 2+ floors
+3. Same tower
+4. Same building
+5. Cross-building — only when genuinely necessary; flagged with a warning
+
+### Tab 6: Demand Forecasting
+
+Data-driven forecasting from **daily attendance data** (CSV: Date, Unit Name, In-Office Count). Upload your own or click **"Generate Sample Data"** for an instant 90-day demo.
+
+**Attendance Trends & Forecast:**
+- Unit selector (default: All Units combined) + forecast horizon slider (1–12 months)
+- Line chart: historical scatter + 21-day EMA + linear trend forecast + 95% confidence band
+- Metrics: Current Median, Trend Slope (people/day), Residual Std, Suggested Growth %
+- *How is this forecast projected?* expander with full methodology explanation
+
+**Forecast Summary (All Units):**
+- Table: Unit | Current Median/Peak | Forecasted Median/Peak | Suggested Growth %
+- **"Apply Forecasted Growth to Active Scenario"** — pushes data-driven growth % into Scenario Lab unit overrides; re-run simulation to see updated demand
+
+**Probabilistic Seat Demand:**
+- Confidence slider: 90% / 95% / 99%
+- Grouped bar: Peak vs Percentile demand per unit
+- Metrics: Total Peak-Based Demand, Total Percentile Demand, Potential Savings
+- Detail table with Bootstrap Monte Carlo confidence intervals per unit
+
+**Day-of-Week Patterns:**
+- Heatmap: units × Mon–Fri, colored by median in-office count
+- Reveals peak days (Tue/Wed) vs low-attendance days suitable for hot-desking
+
+**Advanced Insights** (3 sub-tabs):
+- **Demand Correlation** — Pearson correlation heatmap; high positive = units compete for seats on same days
+- **Capacity Breach Risk** — P(daily attendance > allocated seats) per unit; requires simulation to have been run; shows expected breach days/month and avg magnitude
+- **Temporal Clusters** — groups units by similar attendance behavior (correlation > 0.7) for hot-desking opportunities
+
+### Tab 7: Admin
 
 - **Data Upload** — single Excel file (3 tabs) or three separate files, or load sample data; required-column schema hint displayed under each uploader
 - **Edit Base Data** — modify floor capacities, unit headcounts, attendance & RTO data, and per-unit seat allocation %
@@ -304,7 +364,7 @@ Adjustable in **Admin > Rule Configuration**.
 
 ## AI Features
 
-Three analytical AI features are built into the platform — no external API or internet connection required. All computation runs locally using numpy.
+Six analytical AI features are built into the platform — no external API or internet connection required. All computation runs locally using numpy, pandas, and scipy.
 
 ---
 
@@ -394,6 +454,54 @@ Three analytical AI features are built into the platform — no external API or 
 
 ---
 
+---
+
+### 4. Demand Forecasting *(Demand Forecasting tab)*
+
+**What it does:** Converts daily attendance records into statistical forecasts, probabilistic seat demand, and temporal patterns. Replaces manual growth % guesses with data-driven projections.
+
+**Features:**
+- **Trend Analysis** — linear regression + 21-day EMA on daily data → forecasted median/peak + 95% CI band + suggested annual growth %
+- **Probabilistic Demand** — 90th/95th/99th percentile demand from historical distribution → shows how many seats can be saved vs. always planning for the peak
+- **Bootstrap Confidence Intervals** — 1000-resample Monte Carlo CI on percentile estimates
+- **Day-of-Week Patterns** — median attendance by weekday per unit (reveals Tue/Wed peaks)
+- **Demand Correlation** — Pearson correlation between units (who peaks together, who is a desk-sharing candidate)
+- **Capacity Breach Probability** — `P(daily_attendance > allocated_seats)` from historical data
+- **Temporal Clustering** — groups units by similar attendance behavior (correlation > 0.7)
+
+**Integration:** "Apply Forecasted Growth" writes data-driven growth % into Scenario Lab unit overrides. Re-run simulation to see updated demand.
+
+---
+
+### 5. Scenario Comparison Matrix *(What-If Analysis tab)*
+
+**What it does:** Automatically runs a full grid of parameter combinations — allocation %, RTO mandate, capacity reduction, and optimization mode — and ranks all scenarios by a composite score. Eliminates manual slider-tweaking.
+
+**How it works:**
+1. User selects value sets for each parameter (e.g., Alloc % = [70%, 80%, 90%], Cap Red = [0%, 10%])
+2. `itertools.product` generates all combinations (capped at 24 to keep runtime < 10 seconds)
+3. Each combination runs through the full `run_scenario()` + `optimize_allocation()` pipeline
+4. Results are scored on 4 dimensions (normalized 0–1, higher = better):
+   - **Headroom** (35%) — capacity headroom above demand
+   - **Gap** (35%) — no shortfall = full score; negative gap = proportional penalty
+   - **Fragmentation** (15%) — lower avg fragmentation score = higher score
+   - **Consolidation** (15%) — fewer floors used = higher score
+5. Best scenario is highlighted with a plain-English explanation
+
+---
+
+### 6. Temporal Demand Clustering *(Demand Forecasting tab — Advanced Insights)*
+
+**What it does:** Groups business units by similar temporal attendance patterns to identify hot-desking and shared floor-assignment opportunities — complementing the static co-location scoring which uses HR attributes.
+
+**How it works:**
+1. Pivot daily attendance into a unit × date matrix
+2. Compute pairwise Pearson correlation
+3. Single-pass threshold clustering: units with correlation > 0.7 are grouped together
+4. Same-cluster units have correlated daily demand — they peak and trough together
+
+---
+
 ### Configuring AI Feature Thresholds
 
 All AI feature parameters are in `config/defaults.py`:
@@ -416,6 +524,18 @@ SENSITIVITY_RTO_VARIATIONS = [-1.0, -0.5, 0.5, 1.0]
 # Anomaly detection
 ANOMALY_Z_SCORE_THRESHOLD = 2.0    # Standard deviations to flag
 ANOMALY_MIN_UNITS = 3              # Minimum units required for z-scores
+
+# Demand Forecasting
+FORECAST_DEFAULT_MONTHS = 6
+FORECAST_CONFIDENCE_LEVELS = [0.90, 0.95, 0.99]
+FORECAST_BOOTSTRAP_SAMPLES = 1000
+FORECAST_EMA_SPAN = 21
+
+# Scenario Comparison Matrix
+COMPARISON_MAX_COMBINATIONS = 24
+COMPARISON_ALLOC_OPTIONS = [0.60, 0.70, 0.80, 0.90, 1.00]
+COMPARISON_RTO_OPTIONS = [2.0, 2.5, 3.0, 3.5, 4.0]
+COMPARISON_CAPRED_OPTIONS = [0.0, 0.05, 0.10, 0.15, 0.20]
 ```
 
 ---
@@ -424,12 +544,12 @@ ANOMALY_MIN_UNITS = 3              # Minimum units required for z-scores
 
 ```
 cpg_planning_tool/
-├── app.py                       # Streamlit entry point
+├── app.py                       # Streamlit entry point (7 tabs)
 ├── requirements.txt             # Python dependencies
 ├── config/
-│   ├── defaults.py              # Policy bounds and constants
+│   ├── defaults.py              # Policy bounds, constants, AI feature thresholds
 │   └── ai_config.py            # Gemini API integration (hidden AI brief feature)
-├── models/                      # Data models (Floor, Unit, Scenario, etc.)
+├── models/                      # Data models (Floor, Unit, Scenario, DailyAttendanceRecord, etc.)
 ├── data/                        # File loader, validator, session store, sample data
 ├── engine/
 │   ├── allocation_engine.py     # Seat demand computation and scarcity redistribution
@@ -440,10 +560,24 @@ cpg_planning_tool/
 │   ├── colocation.py            # AI: pairwise unit co-location affinity scoring
 │   ├── sensitivity.py           # AI: one-at-a-time parameter sensitivity analysis
 │   ├── anomaly.py               # AI: z-score attendance anomaly detection
+│   ├── forecasting.py           # AI: demand forecasting (trend, EMA, bootstrap CI, clustering)
+│   ├── scenario_comparison.py   # AI: batch scenario matrix runner + composite ranking
 │   ├── report_generator.py      # Excel report export
 │   └── pdf_report_generator.py  # PDF boardroom report (reportlab)
-├── tabs/                        # All 6 UI tabs
-├── components/                  # Sidebar, charts, metric cards, tables, floor map
+├── tabs/                        # All 7 UI tabs
+│   ├── tab_executive_dashboard.py
+│   ├── tab_unit_impact.py
+│   ├── tab_spatial_floor.py
+│   ├── tab_scenario_lab.py
+│   ├── tab_optimization.py      # What-If Analysis (unified mode + Scenario Comparison Matrix)
+│   ├── tab_forecasting.py       # Demand Forecasting (new in Round 18)
+│   └── tab_admin_governance.py
+├── components/
+│   ├── charts.py                # All Plotly charts
+│   ├── comparison_charts.py     # Multi-scenario comparison charts (new in Round 19)
+│   ├── sidebar.py
+│   ├── tables.py
+│   └── floor_map.py
 ├── tests/                       # Unit tests (pytest)
 ├── docs/                        # Executive summary and documentation
 └── sample_files/                # Pre-generated CSV and Excel files for testing

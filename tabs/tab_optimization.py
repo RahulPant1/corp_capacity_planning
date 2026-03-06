@@ -1,5 +1,6 @@
-"""Tab 5: What-If Analysis — planning what-if, LP floor placement, and AI insights."""
+"""Tab 5: What-If Analysis — objective-first unified planning + optimization."""
 
+import copy as _copy
 import streamlit as st
 import pandas as pd
 from datetime import datetime
@@ -11,8 +12,17 @@ from data.session_store import (
 )
 from engine.optimizer import optimize_allocation
 from engine.scenario_engine import apply_floor_modifications, apply_overrides, run_scenario
+from engine.scenario_comparison import run_scenario_matrix, rank_scenarios, get_best_scenario, build_explanation
 from components.tables import render_comparison_table
-from config.defaults import PLANNING_BUFFER_PRESETS
+from components.comparison_charts import scenario_demand_capacity_bar, scenario_metrics_heatmap
+from config.defaults import (
+    PLANNING_BUFFER_PRESETS,
+    COMPARISON_MAX_COMBINATIONS,
+    COMPARISON_ALLOC_OPTIONS,
+    COMPARISON_RTO_OPTIONS,
+    COMPARISON_CAPRED_OPTIONS,
+    COMPARISON_OBJECTIVES,
+)
 from models.scenario import ScenarioParams
 
 
@@ -20,18 +30,17 @@ def render(sidebar_state):
     """Render the What-If Analysis tab."""
     st.header("What-If Analysis")
 
-    # --- How it works callout ---
-    with st.expander("How does Optimization relate to Simulation?", expanded=False):
+    with st.expander("How does this work?", expanded=False):
         st.markdown("""
-**Simulation** (Scenario Lab) answers: *"How many seats does each unit need?"*
-- Applies growth/attrition, allocation %, RTO mandate → computes per-unit demand
+**Choose an optimization mode** — this determines how seat demand is calculated and which parameters matter:
 
-**Optimization** answers: *"Given those seat counts, where on which floors should each unit sit?"*
-- Takes simulation demand as input → uses LP to decide floor placement
-- Minimizes floors used, maximizes team cohesion (same/adjacent floors)
-- RTO-Based and What-If modes can re-derive demand from attendance data
+| Mode | Demand basis | Alloc % used? | RTO slider |
+|------|-------------|---------------|-----------|
+| **Optimal Placement** | Headcount × Alloc % | ✅ Yes | Global RTO mandate |
+| **RTO-Based** | Actual attendance data | ❌ No | ❌ Not used |
+| **What-If RTO** | Attendance × target RTO | ❌ No | Target RTO level |
 
-> **Important:** Run Simulation first. Re-run Simulation if scenario parameters change, then re-run Optimization.
+Adjust parameters → click **Simulate & Optimize** → review impact metrics + floor assignments → click **Accept & Apply** to commit.
         """)
 
     if not is_data_loaded():
@@ -44,9 +53,9 @@ def render(sidebar_state):
         return
 
     if scenario.is_locked:
-        st.warning(f"Scenario '{scenario.name}' is locked. Optimization results cannot be applied.")
+        st.warning(f"Scenario '{scenario.name}' is locked. Results cannot be applied.")
 
-    # --- Compute effective floors + attendance ---
+    # --- Setup ---
     config = get_rule_config()
     raw_floors = get_floors()
     effective_floors = apply_floor_modifications(raw_floors, scenario)
@@ -54,127 +63,17 @@ def render(sidebar_state):
     unit_names = [u.unit_name for u in units]
     tower_ids = sorted(set(f.tower_id for f in effective_floors))
 
-    raw_total = sum(f.total_seats for f in raw_floors)
     effective_total = sum(f.total_seats for f in effective_floors)
 
     att_profiles = get_attendance()
     att_map_raw = {a.unit_name: a for a in att_profiles}
     _, scenario_att_map = apply_overrides(units, att_map_raw, scenario)
 
-    # --- Planning What-If ---
-    st.subheader("Planning What-If")
-    st.caption(
-        "Adjust planning parameters and see how the total seat gap changes vs the current baseline. "
-        "Use **Apply to Scenario** to lock in the changes and refresh all views."
-    )
-
     rule_config_wi = get_rule_config()
-    wi_col1, wi_col2 = st.columns(2)
-    with wi_col1:
-        wi_alloc_pct = st.slider(
-            "Global Alloc %",
-            min_value=50, max_value=150,
-            value=int(rule_config_wi.get("global_alloc_pct", 0.80) * 100),
-            step=5, format="%d%%",
-            key="wi_alloc",
-            help="Seats allocated as % of projected headcount. Directly drives seat demand.",
-        )
-    with wi_col2:
-        wi_cap_red_pct = st.slider(
-            "Capacity Reduction %",
-            min_value=0, max_value=30,
-            value=int((scenario.params.capacity_reduction_pct or 0.0) * 100),
-            step=5, format="%d%%",
-            key="wi_capred",
-            help="Effective floor capacity removed (e.g. social distancing buffer).",
-        )
 
-    wi_rto = st.slider(
-        "Global RTO Mandate (days/week)",
-        min_value=0.5, max_value=5.0,
-        value=float(scenario.params.global_rto_mandate_days or 3.0),
-        step=0.5,
-        key="wi_rto",
-        help=(
-            "Raises the minimum RTO attendance floor for all units. Affects RTO compliance — "
-            "has limited impact on seat gap in standard allocation mode but significant "
-            "for RTO-Based optimization objectives."
-        ),
-    )
-
-    wi_run_col, wi_apply_col = st.columns([1, 1])
-    with wi_run_col:
-        if st.button("Run What-If", key="btn_wi_run"):
-            from engine.sensitivity import run_single_what_if
-            with st.spinner("Running what-if..."):
-                wi_result = run_single_what_if(
-                    scenario, units, att_map_raw, raw_floors, rule_config_wi,
-                    alloc_pct=wi_alloc_pct / 100.0,
-                    capacity_reduction=wi_cap_red_pct / 100.0,
-                    rto_mandate=wi_rto,
-                )
-            st.session_state[f"wi_result_{scenario.scenario_id}"] = wi_result
-
-    stored_wi = st.session_state.get(f"wi_result_{scenario.scenario_id}")
-    if stored_wi:
-        demand_delta = stored_wi.get("demand_delta", 0)
-        gap_delta = stored_wi["gap_delta"]
-
-        # Row 1: Seat demand (most sensitive to alloc % changes)
-        st.markdown("**Seat Demand**")
-        d1, d2, d3 = st.columns(3)
-        d1.metric("Baseline Demand", f"{stored_wi.get('baseline_demand', 0):,} seats")
-        d2.metric("What-If Demand",  f"{stored_wi.get('result_demand', 0):,} seats")
-        d3.metric("Demand Change", f"{demand_delta:+,} seats",
-                  delta=str(demand_delta), delta_color="inverse")
-
-        # Row 2: Seat gap (sensitive to capacity reduction / RTO changes)
-        st.markdown("**Seat Gap** (allocated − demand; 0 = fully satisfied)")
-        g1, g2, g3 = st.columns(3)
-        g1.metric("Baseline Gap", f"{stored_wi['baseline_gap']:,} seats")
-        g2.metric("What-If Gap",  f"{stored_wi['result_gap']:,} seats")
-        g3.metric("Gap Change", f"{gap_delta:+,} seats",
-                  delta=str(gap_delta), delta_color="inverse")
-
-        # Contextual message
-        if demand_delta == 0 and gap_delta == 0:
-            st.info("No change in demand or gap — parameters match the current baseline.")
-        elif demand_delta != 0 and gap_delta == 0:
-            direction = "more" if demand_delta > 0 else "fewer"
-            st.info(
-                f"Seat demand changes by **{demand_delta:+,} seats** ({direction} seats needed), "
-                f"but the gap stays at {stored_wi['result_gap']:,} — the building has enough "
-                f"capacity to absorb the change. Use **Apply to Scenario** to lock in the new demand plan."
-            )
-        elif gap_delta < 0:
-            st.success(f"Seat gap reduced by {abs(gap_delta):,} seats.")
-        else:
-            st.warning(f"Seat gap increases by {gap_delta:,} seats.")
-
-        with wi_apply_col:
-            if st.button("Apply to Scenario", type="primary", key="btn_wi_apply"):
-                rc = dict(rule_config_wi)
-                rc["global_alloc_pct"] = wi_alloc_pct / 100.0
-                st.session_state["rule_config"] = rc
-                scenario.params = ScenarioParams(
-                    global_rto_mandate_days=wi_rto if wi_rto > 0 else None,
-                    capacity_reduction_pct=wi_cap_red_pct / 100.0,
-                    excluded_floors=scenario.params.excluded_floors,
-                )
-                scenario = run_scenario(scenario, units, att_map_raw, raw_floors, rc)
-                update_scenario(scenario)
-                st.session_state.pop(f"wi_result_{scenario.scenario_id}", None)
-                st.success(
-                    f"Applied: Alloc {wi_alloc_pct}%, Cap Reduction {wi_cap_red_pct}%, "
-                    f"RTO {wi_rto}d/wk. All tabs now reflect the updated scenario."
-                )
-                st.rerun()
-
-    st.divider()
-
-    # --- Floor Placement Optimizer ---
-    st.subheader("Floor Placement Optimizer")
-
+    # =========================================================================
+    # SECTION 1: Optimization Mode (drives which params are active below)
+    # =========================================================================
     objectives = {
         "optimal_placement": "Optimal Placement — seat everyone per allocation rule on fewest floors",
         "rto_based": "RTO-Based — allocate by actual attendance patterns, free unused capacity",
@@ -182,47 +81,78 @@ def render(sidebar_state):
     }
 
     selected_obj = st.radio(
-        "Select optimization objective",
+        "Optimization Mode",
         options=list(objectives.keys()),
         format_func=lambda k: objectives[k],
         key="opt_objective",
+        horizontal=True,
     )
 
-    target_rto = None
-    if selected_obj == "rto_whatif":
-        target_rto = st.slider(
-            "Target RTO days/week for all units",
-            min_value=1.0, max_value=5.0, value=3.0, step=0.5,
-            key="opt_rto_target",
+    # Contextual banner when sliders are disabled
+    if selected_obj == "rto_based":
+        st.info(
+            "**RTO-Based:** Demand is sized directly from attendance data — "
+            "Global Alloc % and RTO Mandate are not used."
+        )
+    elif selected_obj == "rto_whatif":
+        st.info(
+            "**What-If RTO:** Simulates attendance at the target RTO level. "
+            "Global Alloc % is not used — demand is attendance-driven."
         )
 
-    st.caption(
-        "**Placement preference (all objectives):** The optimizer keeps each unit as consolidated "
-        "as possible — strongly preferring same building, then same tower, then adjacent floors. "
-        "Cross-building placement only occurs when a single building genuinely lacks capacity."
+    # =========================================================================
+    # SECTION 2: Planning Parameters (dynamically enabled/disabled by mode)
+    # =========================================================================
+    alloc_disabled = selected_obj in ("rto_based", "rto_whatif")
+    rto_disabled = selected_obj == "rto_based"
+    rto_label = (
+        "Target RTO (days/week)"
+        if selected_obj == "rto_whatif"
+        else "Global RTO Mandate (days/week)"
     )
 
-    # --- Active Constraints (from scenario) ---
-    with st.expander("Scenario Settings in Effect", expanded=False):
-        if len(effective_floors) < len(raw_floors) or effective_total < raw_total:
-            st.markdown(
-                f"- **Floor capacity**: {len(raw_floors)} floors ({raw_total:,} seats) "
-                f"→ **{len(effective_floors)} floors ({effective_total:,} seats)** after scenario adjustments"
-            )
-        else:
-            st.markdown(f"- **Floor capacity**: {len(effective_floors)} floors, {effective_total:,} total seats")
-        st.markdown(f"- **Global allocation %**: {config.get('global_alloc_pct', 0.80):.0%}")
-        st.markdown(f"- **Demand cap**: each unit gets at most their simulation demand (respects allocation rule)")
-        if scenario.params.excluded_floors:
-            st.markdown(f"- **Excluded floors**: {', '.join(scenario.params.excluded_floors)}")
-        if selected_obj in ("rto_based", "rto_whatif"):
-            st.markdown(f"- **Demand basis**: Attendance data (Median HC + Peak Buffer × RTO)")
-            if selected_obj == "rto_whatif" and target_rto:
-                st.markdown(f"- **Target RTO**: {target_rto} days/week for all units")
+    p1, p2, p3 = st.columns(3)
+    with p1:
+        wi_alloc_pct = st.slider(
+            "Global Alloc %",
+            min_value=50, max_value=150,
+            value=int(rule_config_wi.get("global_alloc_pct", 0.80) * 100),
+            step=5, format="%d%%",
+            key="wi_alloc",
+            disabled=alloc_disabled,
+            help="Seats allocated as % of projected headcount. Drives seat demand (Optimal Placement only).",
+        )
+    with p2:
+        wi_rto = st.slider(
+            rto_label,
+            min_value=0.5, max_value=5.0,
+            value=float(scenario.params.global_rto_mandate_days or 3.0),
+            step=0.5,
+            key="wi_rto",
+            disabled=rto_disabled,
+            help=(
+                "RTO mandate for simulation (Optimal Placement) or "
+                "target RTO level for the optimizer (What-If RTO)."
+            ),
+        )
+    with p3:
+        wi_cap_red_pct = st.slider(
+            "Capacity Reduction %",
+            min_value=0, max_value=30,
+            value=int((scenario.params.capacity_reduction_pct or 0.0) * 100),
+            step=5, format="%d%%",
+            key="wi_capred",
+            help="Removes this % of floor capacity (e.g. social distancing buffer). Applies to all modes.",
+        )
 
-    # --- Quick Controls ---
-    st.subheader("Quick Controls")
-    st.caption("These constraints are applied on top of the objective. The optimizer relaxes them if they make the problem infeasible.")
+    # =========================================================================
+    # SECTION 3: Placement Controls
+    # =========================================================================
+    st.markdown("**Placement Controls**")
+    st.caption(
+        "Applied on top of the optimization objective. "
+        "Relaxed automatically if they make the problem infeasible."
+    )
     qc1, qc2 = st.columns(2)
     with qc1:
         max_floors_val = st.slider(
@@ -239,7 +169,9 @@ def render(sidebar_state):
             help="Each unit is guaranteed at least this % of their demand, even under scarcity.",
         ) / 100.0
 
-    # --- Advanced: Unit Tower Restrictions ---
+    # =========================================================================
+    # SECTION 4: Advanced Tower Restrictions
+    # =========================================================================
     with st.expander("Advanced: Unit Tower Restrictions", expanded=False):
         st.caption("Pin specific units to certain towers. Leave all towers selected = no restriction.")
         pin_data = {}
@@ -255,66 +187,100 @@ def render(sidebar_state):
                 )
                 pin_data[uname] = selected if selected != tower_ids else None
 
-        # Store pin selections
         st.session_state["opt_pin_selections"] = {
             uname: st.session_state.get(f"opt_pin_{uname}", tower_ids)
             for uname in unit_names
         }
 
-    # Build pinned_tower_ids dict (only units with restrictions)
     pinned_tower_ids = {
         uname: towers
         for uname, towers in pin_data.items()
         if towers is not None and towers != tower_ids
     } or None
 
-    st.divider()
-
-    # Scenario settings summary
+    # Active scenario summary caption
     active_items = []
-    if scenario.params.global_rto_mandate_days:
-        active_items.append(f"RTO mandate: {scenario.params.global_rto_mandate_days}d/wk")
     if scenario.params.excluded_floors:
         active_items.append(f"{len(scenario.params.excluded_floors)} floors excluded")
+    if scenario.params.capacity_reduction_pct:
+        active_items.append(f"capacity reduced {scenario.params.capacity_reduction_pct:.0%}")
     if active_items:
-        st.caption("Scenario settings: " + " · ".join(active_items))
-    else:
-        st.caption("No scenario constraints active — running against full floor supply.")
+        st.caption("Current scenario: " + " · ".join(active_items))
 
-    # --- Run Optimization ---
-    col1, col2, col3 = st.columns([1, 1, 2])
+    st.divider()
+
+    # =========================================================================
+    # SECTION 5: Run Buttons
+    # =========================================================================
+    col1, col2 = st.columns([1, 3])
     with col1:
-        run_opt = st.button("Run Optimization", type="primary", key="btn_run_opt")
+        run_main = st.button("Simulate & Optimize", type="primary", key="btn_run_main")
     with col2:
-        run_sim_opt = st.button(
-            "Simulate & Optimize", key="btn_sim_opt",
-            help=(
-                "Applies the Planning What-If slider values, re-runs the simulation "
-                "to update demand, then optimizes floor placement — all in one step."
-            ),
+        run_sensitivity = st.button(
+            "Run Sensitivity Analysis", key="btn_sensitivity",
+            help="Runs Lean/Balanced/Conservative buffer presets and compares seat demand range.",
         )
-    with col3:
-        run_sensitivity = st.button("Run Sensitivity Analysis", key="btn_sensitivity",
-                                    help="Runs Lean/Balanced/Conservative buffer presets and compares seat demand range.")
 
-    if run_opt:
-        with st.spinner("Running optimization..."):
+    # =========================================================================
+    # SECTION 6: Handlers
+    # =========================================================================
+    if run_main:
+        with st.spinner("Simulating scenario then optimizing floor placement..."):
+            rc_combined = dict(rule_config_wi)
+
+            # Build mode-specific params
+            if selected_obj == "optimal_placement":
+                rc_combined["global_alloc_pct"] = wi_alloc_pct / 100.0
+                rto_mandate_val = wi_rto
+                target_rto_for_opt = None
+            elif selected_obj == "rto_whatif":
+                rc_combined["global_alloc_pct"] = config.get("global_alloc_pct", 0.80)
+                rto_mandate_val = None
+                target_rto_for_opt = wi_rto
+            else:  # rto_based
+                rc_combined["global_alloc_pct"] = config.get("global_alloc_pct", 0.80)
+                rto_mandate_val = None
+                target_rto_for_opt = None
+
+            # Build temp scenario with what-if params
+            temp_scenario = _copy.deepcopy(scenario)
+            temp_scenario.params = ScenarioParams(
+                global_rto_mandate_days=rto_mandate_val,
+                capacity_reduction_pct=wi_cap_red_pct / 100.0,
+                excluded_floors=scenario.params.excluded_floors,
+            )
+
+            # Re-run simulation with updated demand params
+            temp_scenario = run_scenario(temp_scenario, units, att_map_raw, raw_floors, rc_combined)
+            temp_eff_floors = apply_floor_modifications(raw_floors, temp_scenario)
+            _, temp_att_map = apply_overrides(units, att_map_raw, temp_scenario)
+
+            # Run LP optimizer
             result = optimize_allocation(
-                allocations=scenario.allocation_results,
-                floors=effective_floors,
+                allocations=temp_scenario.allocation_results,
+                floors=temp_eff_floors,
                 baseline_assignments=scenario.floor_assignments,
                 objective=selected_obj,
                 excluded_floor_ids=[],
                 units=units,
-                attendance_map=scenario_att_map,
-                rule_config=config,
-                target_rto_days=target_rto,
+                attendance_map=temp_att_map,
+                rule_config=rc_combined,
+                target_rto_days=target_rto_for_opt,
                 max_floors_per_unit=max_floors_val,
                 pinned_tower_ids=pinned_tower_ids,
                 min_guarantee_pct=min_guar_val,
             )
 
-        # Store in history (last 3 runs)
+        # Store results + params used (for Accept & Apply)
+        st.session_state["optimization_result"] = result
+        st.session_state["last_sim_scenario"] = temp_scenario
+        st.session_state["last_run_params"] = {
+            "objective": selected_obj,
+            "alloc_pct": rc_combined["global_alloc_pct"],
+            "rto_mandate": rto_mandate_val,
+            "cap_red": wi_cap_red_pct / 100.0,
+        }
+
         history = st.session_state.get("optimization_history", [])
         history.insert(0, {
             "timestamp": datetime.now().strftime("%H:%M:%S"),
@@ -325,63 +291,6 @@ def render(sidebar_state):
             "result": result,
         })
         st.session_state["optimization_history"] = history[:3]
-        st.session_state["optimization_result"] = result
-
-    if run_sim_opt:
-        import copy as _copy
-        with st.spinner("Simulating with What-If parameters, then optimizing..."):
-            # Step 1: build temp scenario with what-if planning params
-            rc_combined = dict(rule_config_wi)
-            rc_combined["global_alloc_pct"] = wi_alloc_pct / 100.0
-            temp_scenario = _copy.deepcopy(scenario)
-            temp_scenario.params = ScenarioParams(
-                global_rto_mandate_days=wi_rto if wi_rto > 0 else None,
-                capacity_reduction_pct=wi_cap_red_pct / 100.0,
-                excluded_floors=scenario.params.excluded_floors,
-            )
-            # Step 2: re-run simulation with modified demand params
-            temp_scenario = run_scenario(temp_scenario, units, att_map_raw, raw_floors, rc_combined)
-            # Step 3: derive effective floors + attendance for optimizer
-            temp_eff_floors = apply_floor_modifications(raw_floors, temp_scenario)
-            _, temp_att_map = apply_overrides(units, att_map_raw, temp_scenario)
-            # Step 4: run LP optimizer on updated demand
-            result = optimize_allocation(
-                allocations=temp_scenario.allocation_results,
-                floors=temp_eff_floors,
-                baseline_assignments=scenario.floor_assignments,
-                objective=selected_obj,
-                excluded_floor_ids=[],
-                units=units,
-                attendance_map=temp_att_map,
-                rule_config=rc_combined,
-                target_rto_days=target_rto,
-                max_floors_per_unit=max_floors_val,
-                pinned_tower_ids=pinned_tower_ids,
-                min_guarantee_pct=min_guar_val,
-            )
-
-        history = st.session_state.get("optimization_history", [])
-        history.insert(0, {
-            "timestamp": datetime.now().strftime("%H:%M:%S"),
-            "objective": objectives[selected_obj].split(" —")[0] + " (Sim+Opt)",
-            "total_seats": sum(result.unit_allocations.values()),
-            "floors_used": len(set((a.tower_id, a.floor_number) for a in result.assignments)),
-            "status": result.status,
-            "result": result,
-        })
-        st.session_state["optimization_history"] = history[:3]
-        st.session_state["optimization_result"] = result
-
-        # Show seat gap impact from the simulation step
-        baseline_gap = sum(a.seat_gap for a in scenario.allocation_results)
-        new_gap = sum(a.seat_gap for a in temp_scenario.allocation_results)
-        gap_delta = new_gap - baseline_gap
-        if gap_delta != 0:
-            st.info(
-                f"Planning What-If changed seat gap by **{gap_delta:+,} seats** "
-                f"(baseline {baseline_gap:,} → what-if {new_gap:,}). "
-                f"Optimization below reflects these updated demand figures."
-            )
 
     if run_sensitivity:
         with st.spinner("Running sensitivity analysis (Lean / Balanced / Conservative)..."):
@@ -399,7 +308,7 @@ def render(sidebar_state):
                     units=units,
                     attendance_map=scenario_att_map,
                     rule_config=sens_config,
-                    target_rto_days=target_rto,
+                    target_rto_days=None,
                 )
                 opt_seats = sum(r.unit_allocations.values())
                 floors_used = len(set((a.tower_id, a.floor_number) for a in r.assignments))
@@ -412,7 +321,9 @@ def render(sidebar_state):
                 })
             st.session_state["sensitivity_result"] = sensitivity_rows
 
-    # --- Sensitivity Analysis Results ---
+    # =========================================================================
+    # SECTION 7: Sensitivity Results
+    # =========================================================================
     if st.session_state.get("sensitivity_result"):
         st.divider()
         st.subheader("Sensitivity Analysis")
@@ -420,12 +331,53 @@ def render(sidebar_state):
         sens_df = pd.DataFrame(st.session_state["sensitivity_result"])
         st.dataframe(sens_df, use_container_width=True, hide_index=True)
 
-    # --- Display Optimization Results ---
+    # =========================================================================
+    # SECTION 8: Combined Results Panel
+    # =========================================================================
     result = st.session_state.get("optimization_result")
+    last_sim = st.session_state.get("last_sim_scenario")
+
     if result:
         st.divider()
-        st.subheader("Optimization Results")
+        st.subheader("Results")
 
+        # --- Planning Impact metrics (demand + capacity delta vs baseline) ---
+        if last_sim:
+            baseline_demand = sum(a.effective_demand_seats for a in scenario.allocation_results)
+            new_demand = sum(a.effective_demand_seats for a in last_sim.allocation_results)
+            new_eff_floors = apply_floor_modifications(raw_floors, last_sim)
+            new_cap = sum(f.total_seats for f in new_eff_floors)
+            demand_delta = new_demand - baseline_demand
+            cap_delta = new_cap - effective_total
+            headroom = new_cap - new_demand
+
+            if demand_delta != 0 or cap_delta != 0:
+                st.markdown("**Planning Impact** (vs current baseline)")
+                m1, m2, m3 = st.columns(3)
+                m1.metric(
+                    "Seat Demand", f"{new_demand:,}",
+                    delta=f"{demand_delta:+,}" if demand_delta != 0 else None,
+                    delta_color="inverse",
+                )
+                m2.metric(
+                    "Available Capacity", f"{new_cap:,}",
+                    delta=f"{cap_delta:+,}" if cap_delta != 0 else None,
+                    delta_color="off",
+                )
+                m3.metric("Headroom", f"{headroom:+,} seats")
+
+                if headroom < 0:
+                    st.warning(
+                        f"Capacity shortfall: demand exceeds capacity by **{abs(headroom):,} seats**."
+                    )
+                elif cap_delta < 0 and demand_delta == 0:
+                    st.info(
+                        f"Capacity reduced by **{abs(cap_delta):,} seats** but demand is still met "
+                        f"— headroom shrinks from {effective_total - baseline_demand:,} to "
+                        f"**{headroom:,} seats**."
+                    )
+
+        # --- Optimization Status ---
         if "Optimal" in result.status:
             st.success(f"Status: {result.status}")
         else:
@@ -434,33 +386,35 @@ def render(sidebar_state):
                 st.warning(result.message)
             return
 
-        if "relaxed" in result.message.lower():
-            st.warning(result.message)
-        else:
-            st.info(result.message)
+        if result.message:
+            if "relaxed" in result.message.lower():
+                st.warning(result.message)
+            else:
+                st.info(result.message)
 
-        # Savings summary (RTO objectives)
+        # --- Savings summary (RTO objectives) ---
         if result.savings_summary:
             sv = result.savings_summary
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Policy-Based Seats (80% Rule)", f"{sv['allocation_rule_seats']:,}")
-            col2.metric("Attendance-Based Seats", f"{sv['rto_based_seats']:,}")
-            col3.metric("Seats Saved", f"{sv['seats_saved']:,}",
-                        delta=f"{sv['seats_saved']:+,}",
-                        delta_color="normal" if sv['seats_saved'] >= 0 else "inverse")
-            col4.metric("Floors Freed", sv['floors_freed'],
-                        delta=f"{sv['floors_freed']:+d}",
-                        delta_color="normal" if sv['floors_freed'] >= 0 else "inverse")
+            sv1, sv2, sv3, sv4 = st.columns(4)
+            sv1.metric("Policy-Based Seats (80% Rule)", f"{sv['allocation_rule_seats']:,}")
+            sv2.metric("Attendance-Based Seats", f"{sv['rto_based_seats']:,}")
+            sv3.metric("Seats Saved", f"{sv['seats_saved']:,}",
+                       delta=f"{sv['seats_saved']:+,}",
+                       delta_color="normal" if sv["seats_saved"] >= 0 else "inverse")
+            sv4.metric("Floors Freed", sv["floors_freed"],
+                       delta=f"{sv['floors_freed']:+d}",
+                       delta_color="normal" if sv["floors_freed"] >= 0 else "inverse")
 
-        # Before/After comparison
+        # --- Before / After Comparison ---
         st.subheader("Before / After Comparison")
-        st.caption("Per-unit seat count before (policy rule) and after (optimization). "
-                   "Green = seats freed, Red = seats added.")
+        st.caption(
+            "Per-unit seat count before (policy rule) and after (optimization). "
+            "Green = seats freed, Red = seats added."
+        )
         if result.before_after:
             ba_df = pd.DataFrame(result.before_after)
             render_comparison_table(ba_df)
 
-            # Warn if any unit ended up placed across multiple buildings
             cross_bldg_units = [
                 row["Unit"] for row in result.before_after
                 if row.get("Buildings After", 1) > 1
@@ -479,49 +433,46 @@ def render(sidebar_state):
             total_floors_before = sum(r["Before Floors"] for r in result.before_after)
             total_floors_after = sum(r["After Floors"] for r in result.before_after)
 
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total Seats", f"{total_after:,}", delta=f"{total_after - total_before:+,}")
-            col2.metric("Total Floor Assignments", total_floors_after,
-                        delta=f"{total_floors_after - total_floors_before:+d}")
-            col3.metric("Units Consolidated",
-                        sum(1 for r in result.before_after if r["Floor Change"] < 0))
+            s1, s2, s3 = st.columns(3)
+            s1.metric("Total Seats", f"{total_after:,}", delta=f"{total_after - total_before:+,}")
+            s2.metric("Total Floor Assignments", total_floors_after,
+                      delta=f"{total_floors_after - total_floors_before:+d}")
+            s3.metric("Units Consolidated",
+                      sum(1 for r in result.before_after if r["Floor Change"] < 0))
 
-        # --- Cost Estimation Panel ---
-        st.subheader("Cost Estimation")
-        cost_col1, cost_col2 = st.columns([1, 3])
-        with cost_col1:
-            cost_per_seat = st.number_input(
-                "Cost per seat per year ($)",
-                min_value=1000, max_value=50000, value=10000, step=1000,
-                key="opt_cost_per_seat",
-            )
+        # --- Cost Estimation ---
+        with st.expander("Cost Estimation", expanded=False):
+            cost_col1, _ = st.columns([1, 3])
+            with cost_col1:
+                cost_per_seat = st.number_input(
+                    "Cost per seat per year ($)",
+                    min_value=1000, max_value=50000, value=10000, step=1000,
+                    key="opt_cost_per_seat",
+                )
+            if result.unit_allocations and cost_per_seat:
+                total_opt_seats = sum(result.unit_allocations.values())
+                total_opt_cost = total_opt_seats * cost_per_seat
+                ce1, ce2, ce3 = st.columns(3)
+                ce1.metric("Optimized Seats", f"{total_opt_seats:,}")
+                ce2.metric("Annual Cost (Optimized)", f"${total_opt_cost:,.0f}")
+                if result.savings_summary:
+                    savings_cost = result.savings_summary["seats_saved"] * cost_per_seat
+                    ce3.metric("Annual Savings", f"${savings_cost:,.0f}",
+                               delta=f"${savings_cost:+,.0f}",
+                               delta_color="normal" if savings_cost >= 0 else "inverse")
 
-        if result.unit_allocations and cost_per_seat:
-            total_opt_seats = sum(result.unit_allocations.values())
-            total_opt_cost = total_opt_seats * cost_per_seat
+                with st.expander("Per-Unit Cost Breakdown", expanded=False):
+                    cost_rows = [
+                        {
+                            "Unit": u,
+                            "Optimized Seats": seats,
+                            "Annual Cost": f"${seats * cost_per_seat:,.0f}",
+                        }
+                        for u, seats in sorted(result.unit_allocations.items())
+                    ]
+                    st.dataframe(pd.DataFrame(cost_rows), use_container_width=True, hide_index=True)
 
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Optimized Seats", f"{total_opt_seats:,}")
-            col2.metric("Annual Cost (Optimized)", f"${total_opt_cost:,.0f}")
-
-            if result.savings_summary:
-                savings_cost = result.savings_summary["seats_saved"] * cost_per_seat
-                col3.metric("Annual Savings", f"${savings_cost:,.0f}",
-                            delta=f"${savings_cost:+,.0f}",
-                            delta_color="normal" if savings_cost >= 0 else "inverse")
-
-            # Per-unit cost table
-            with st.expander("Per-Unit Cost Breakdown", expanded=False):
-                cost_rows = []
-                for u, seats in sorted(result.unit_allocations.items()):
-                    cost_rows.append({
-                        "Unit": u,
-                        "Optimized Seats": seats,
-                        "Annual Cost": f"${seats * cost_per_seat:,.0f}",
-                    })
-                st.dataframe(pd.DataFrame(cost_rows), use_container_width=True, hide_index=True)
-
-        # Consolidation suggestions
+        # --- Consolidation Suggestions ---
         if result.consolidation_suggestions:
             st.subheader("Consolidation Suggestions")
             for s in result.consolidation_suggestions:
@@ -530,44 +481,304 @@ def render(sidebar_state):
         # --- Optimization History ---
         history = st.session_state.get("optimization_history", [])
         if len(history) > 1:
-            st.subheader("Optimization History (Last 3 Runs)")
-            hist_rows = [
-                {
-                    "Time": h["timestamp"],
-                    "Objective": h["objective"],
-                    "Total Seats": h["total_seats"],
-                    "Floors Used": h["floors_used"],
-                    "Status": h["status"],
-                }
-                for h in history
-            ]
-            st.dataframe(pd.DataFrame(hist_rows), use_container_width=True, hide_index=True)
+            with st.expander("Optimization History (Last 3 Runs)", expanded=False):
+                hist_rows = [
+                    {
+                        "Time": h["timestamp"],
+                        "Objective": h["objective"],
+                        "Total Seats": h["total_seats"],
+                        "Floors Used": h["floors_used"],
+                        "Status": h["status"],
+                    }
+                    for h in history
+                ]
+                st.dataframe(pd.DataFrame(hist_rows), use_container_width=True, hide_index=True)
 
-        # Accept button
+        # --- Accept & Apply (commits demand params + floor assignments together) ---
         st.divider()
         if not scenario.is_locked:
+            lrp = st.session_state.get("last_run_params", {})
+            obj_label = objectives.get(lrp.get("objective", selected_obj), "").split(" —")[0]
+            st.caption(
+                f"Last run: **{obj_label}** · "
+                f"Alloc {lrp.get('alloc_pct', config.get('global_alloc_pct', 0.80)):.0%} · "
+                f"Cap reduction {lrp.get('cap_red', 0.0):.0%}"
+                + (f" · RTO {lrp['rto_mandate']}d/wk" if lrp.get("rto_mandate") else "")
+            )
             if st.button("Accept & Apply to Scenario", type="primary", key="btn_accept_opt"):
+                # Apply planning demand params
+                rc = dict(config)
+                rc["global_alloc_pct"] = lrp.get("alloc_pct", config.get("global_alloc_pct", 0.80))
+                st.session_state["rule_config"] = rc
+                scenario.params = ScenarioParams(
+                    global_rto_mandate_days=lrp.get("rto_mandate"),
+                    capacity_reduction_pct=lrp.get("cap_red", 0.0),
+                    excluded_floors=scenario.params.excluded_floors,
+                )
+                # Apply floor assignments from optimizer
                 scenario.floor_assignments = result.assignments
                 for alloc in scenario.allocation_results:
                     alloc.allocated_seats = result.unit_allocations.get(alloc.unit_name, 0)
                     alloc.seat_gap = alloc.allocated_seats - alloc.effective_demand_seats
-
+                # Re-run scenario so all tabs see updated demand
+                scenario = run_scenario(scenario, units, att_map_raw, raw_floors, rc)
                 update_scenario(scenario)
                 add_audit_entry(
                     "accept_optimization", scenario.scenario_id,
-                    "floor_assignments", "rule-based", f"optimized ({selected_obj})",
-                    rationale=f"Accepted {selected_obj} optimization",
+                    "floor_assignments", "rule-based",
+                    f"optimized ({lrp.get('objective', selected_obj)})",
+                    rationale=(
+                        f"Accepted {lrp.get('objective', selected_obj)} optimization. "
+                        f"Alloc {rc['global_alloc_pct']:.0%}, "
+                        f"cap red {lrp.get('cap_red', 0.0):.0%}"
+                    ),
                 )
-                st.success("Optimization results applied to scenario.")
-                st.info("Dashboard, Spatial View, and Unit Impact now reflect the optimized allocation.")
+                st.success(
+                    "Scenario updated — demand params and floor assignments applied. "
+                    "Dashboard, Spatial View, and Unit Impact now reflect the changes."
+                )
                 st.session_state.pop("optimization_result", None)
+                st.session_state.pop("last_sim_scenario", None)
+                st.session_state.pop("last_run_params", None)
                 st.rerun()
         else:
             st.warning("Cannot apply — scenario is locked.")
 
     st.divider()
 
-    # --- Co-location Insights ---
+    # =========================================================================
+    # SECTION 9: Scenario Comparison Matrix
+    # =========================================================================
+    with st.expander("Scenario Comparison Matrix", expanded=False):
+        st.markdown(
+            "Automatically run **multiple parameter combinations** and compare results side-by-side. "
+            "Select the values you want to test for each parameter — the tool will run every combination "
+            "and rank them by composite score (headroom, gap, fragmentation, consolidation)."
+        )
+        st.caption(
+            f"Maximum {COMPARISON_MAX_COMBINATIONS} combinations. "
+            "Placement controls (Max Floors, Min Guarantee) from the sliders above are applied to all runs."
+        )
+
+        # ── Parameter selection ──────────────────────────────────────
+        st.markdown("**Step 1: Select parameter values to test**")
+
+        cmp_c1, cmp_c2 = st.columns(2)
+        with cmp_c1:
+            use_alloc = st.checkbox("Vary Global Alloc %", value=True, key="cmp_use_alloc")
+            if use_alloc:
+                cmp_alloc_vals = st.multiselect(
+                    "Alloc % values",
+                    options=COMPARISON_ALLOC_OPTIONS,
+                    default=[0.70, 0.80, 0.90],
+                    format_func=lambda x: f"{x:.0%}",
+                    key="cmp_alloc_vals",
+                )
+            else:
+                cmp_alloc_vals = [rule_config_wi.get("global_alloc_pct", 0.80)]
+
+            use_rto = st.checkbox("Vary RTO Mandate", value=False, key="cmp_use_rto")
+            if use_rto:
+                cmp_rto_vals = st.multiselect(
+                    "RTO values (days/week)",
+                    options=COMPARISON_RTO_OPTIONS,
+                    default=[2.0, 3.0, 4.0],
+                    format_func=lambda x: f"{x:.1f}d/wk",
+                    key="cmp_rto_vals",
+                )
+            else:
+                cmp_rto_vals = [float(scenario.params.global_rto_mandate_days or 3.0)]
+
+        with cmp_c2:
+            use_capred = st.checkbox("Vary Capacity Reduction %", value=False, key="cmp_use_capred")
+            if use_capred:
+                cmp_capred_vals = st.multiselect(
+                    "Capacity Reduction values",
+                    options=COMPARISON_CAPRED_OPTIONS,
+                    default=[0.0, 0.10],
+                    format_func=lambda x: f"{x:.0%}",
+                    key="cmp_capred_vals",
+                )
+            else:
+                cmp_capred_vals = [float(scenario.params.capacity_reduction_pct or 0.0)]
+
+            use_obj = st.checkbox("Vary Optimization Mode", value=True, key="cmp_use_obj")
+            if use_obj:
+                obj_display = {
+                    "optimal_placement": "Optimal Placement",
+                    "rto_based": "RTO-Based",
+                }
+                cmp_obj_vals = st.multiselect(
+                    "Optimization modes",
+                    options=COMPARISON_OBJECTIVES,
+                    default=["optimal_placement"],
+                    format_func=lambda x: obj_display.get(x, x),
+                    key="cmp_obj_vals",
+                )
+            else:
+                cmp_obj_vals = ["optimal_placement"]
+
+        # Guard: non-empty selections
+        cmp_alloc_vals = cmp_alloc_vals or [rule_config_wi.get("global_alloc_pct", 0.80)]
+        cmp_rto_vals   = cmp_rto_vals   or [float(scenario.params.global_rto_mandate_days or 3.0)]
+        cmp_capred_vals = cmp_capred_vals or [0.0]
+        cmp_obj_vals   = cmp_obj_vals   or ["optimal_placement"]
+
+        n_combos = len(cmp_alloc_vals) * len(cmp_rto_vals) * len(cmp_capred_vals) * len(cmp_obj_vals)
+        if n_combos > COMPARISON_MAX_COMBINATIONS:
+            st.warning(
+                f"**{n_combos} combinations** exceeds the limit of {COMPARISON_MAX_COMBINATIONS}. "
+                "Please reduce the number of values selected."
+            )
+            run_matrix = False
+        else:
+            st.info(f"**{n_combos} combination{'s' if n_combos != 1 else ''}** will be run.")
+            run_matrix = st.button(
+                f"Run All {n_combos} Scenarios", type="primary", key="btn_run_matrix",
+            )
+
+        # ── Run matrix ───────────────────────────────────────────────
+        if run_matrix:
+            param_grid = {
+                "alloc_pct":   cmp_alloc_vals,
+                "rto_mandate": cmp_rto_vals,
+                "cap_red":     cmp_capred_vals,
+                "objective":   cmp_obj_vals,
+            }
+            progress_bar = st.progress(0, text="Running scenarios…")
+            with st.spinner(f"Running {n_combos} scenario combinations…"):
+                raw_results = run_scenario_matrix(
+                    base_scenario=scenario,
+                    units=units,
+                    attendance_map=att_map_raw,
+                    floors=raw_floors,
+                    rule_config=rule_config_wi,
+                    param_grid=param_grid,
+                    max_floors_per_unit=max_floors_val,
+                    min_guarantee_pct=min_guar_val,
+                )
+                ranked = rank_scenarios(raw_results)
+            progress_bar.progress(1.0, text="Done.")
+            st.session_state["cmp_matrix_results"] = ranked
+
+        # ── Results ──────────────────────────────────────────────────
+        ranked_results = st.session_state.get("cmp_matrix_results")
+        if ranked_results:
+            st.markdown("---")
+            st.markdown("**Step 2: Comparison Report**")
+
+            best = get_best_scenario(ranked_results)
+            if best and not best["opt_status"].startswith("Error"):
+                obj_label = {
+                    "optimal_placement": "Optimal Placement",
+                    "rto_based": "RTO-Based",
+                    "rto_whatif": "What-If RTO",
+                }.get(best["objective"], best["objective"])
+                alloc_str = f"Alloc {best['alloc_pct']:.0%}, " if best["alloc_pct"] is not None else ""
+                st.success(
+                    f"**Best Scenario #{best['rank']}:** "
+                    f"{alloc_str}RTO {best['rto_mandate']:.1f}d/wk, "
+                    f"Cap Red {best['cap_red']:.0%}, {obj_label}  \n"
+                    f"{build_explanation(best)}"
+                )
+
+            # Summary table
+            display_rows = []
+            for r in ranked_results:
+                display_rows.append({
+                    "Rank": r["rank"],
+                    "Alloc %": f"{r['alloc_pct']:.0%}" if r["alloc_pct"] is not None else "N/A",
+                    "RTO": f"{r['rto_mandate']:.1f}d",
+                    "Cap Red": f"{r['cap_red']:.0%}",
+                    "Mode": {"optimal_placement": "Optimal", "rto_based": "RTO", "rto_whatif": "WI"}.get(r["objective"], r["objective"]),
+                    "Demand": f"{r['demand']:,}",
+                    "Capacity": f"{r['capacity']:,}",
+                    "Headroom": f"{r['headroom']:+,}",
+                    "Gap": f"{r['total_gap']:+,}",
+                    "Units at Risk": r["units_at_risk"],
+                    "Opt Seats": f"{r['opt_seats']:,}",
+                    "Floors Used": r["floors_used"],
+                    "Avg Frag": f"{r['avg_fragmentation']:.2f}",
+                    "Seats Saved": f"{r['seats_saved']:,}",
+                    "Status": r["opt_status"],
+                    "Score": f"{r.get('composite_score', 0):.3f}",
+                })
+            st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+
+            # Charts
+            valid_ranked = [r for r in ranked_results if not r["opt_status"].startswith("Error")]
+            if len(valid_ranked) >= 2:
+                tab_bar, tab_heat = st.tabs(["Demand / Capacity Chart", "Metrics Heatmap"])
+                with tab_bar:
+                    fig_bar = scenario_demand_capacity_bar(valid_ranked)
+                    st.plotly_chart(fig_bar, use_container_width=True, key="cmp_bar_chart")
+                with tab_heat:
+                    fig_heat = scenario_metrics_heatmap(valid_ranked)
+                    st.plotly_chart(fig_heat, use_container_width=True, key="cmp_heat_chart")
+
+            # Adopt a scenario
+            st.markdown("**Adopt a Scenario**")
+            st.caption("Applies the selected scenario's parameters and floor assignments to the active scenario.")
+            adoptable = [r for r in ranked_results if not r["opt_status"].startswith("Error")]
+            if adoptable and not scenario.is_locked:
+                adopt_options = {
+                    r["idx"]: (
+                        f"#{r['rank']} — "
+                        + (f"Alloc {r['alloc_pct']:.0%}, " if r["alloc_pct"] is not None else "")
+                        + f"RTO {r['rto_mandate']:.1f}d, Cap Red {r['cap_red']:.0%}, "
+                        + {"optimal_placement": "Optimal", "rto_based": "RTO", "rto_whatif": "WI"}.get(r["objective"], r["objective"])
+                        + f"  (score {r.get('composite_score', 0):.3f})"
+                    )
+                    for r in adoptable
+                }
+                adopt_idx = st.selectbox(
+                    "Select scenario to adopt",
+                    options=list(adopt_options.keys()),
+                    format_func=lambda x: adopt_options[x],
+                    key="cmp_adopt_select",
+                )
+                if st.button("Adopt Selected Scenario", type="primary", key="btn_adopt_matrix"):
+                    chosen = next(r for r in adoptable if r["idx"] == adopt_idx)
+                    # Apply params
+                    rc_adopt = dict(chosen["_rc"])
+                    st.session_state["rule_config"] = rc_adopt
+                    scenario.params = ScenarioParams(
+                        global_rto_mandate_days=(
+                            chosen["rto_mandate"] if chosen["objective"] == "optimal_placement" else None
+                        ),
+                        capacity_reduction_pct=chosen["cap_red"],
+                        excluded_floors=scenario.params.excluded_floors,
+                    )
+                    scenario.floor_assignments = chosen["_assignments"]
+                    for alloc in scenario.allocation_results:
+                        alloc.allocated_seats = chosen["_unit_allocations"].get(alloc.unit_name, 0)
+                        alloc.seat_gap = alloc.allocated_seats - alloc.effective_demand_seats
+                    scenario = run_scenario(scenario, units, att_map_raw, raw_floors, rc_adopt)
+                    update_scenario(scenario)
+                    add_audit_entry(
+                        "adopt_matrix_scenario", scenario.scenario_id,
+                        "floor_assignments", "rule-based",
+                        f"matrix scenario #{chosen['rank']} ({chosen['objective']})",
+                        rationale=(
+                            f"Adopted from comparison matrix: alloc {chosen['alloc_pct']}, "
+                            f"rto {chosen['rto_mandate']}, cap_red {chosen['cap_red']:.0%}, "
+                            f"mode {chosen['objective']}"
+                        ),
+                    )
+                    st.success(
+                        f"Scenario #{chosen['rank']} adopted — parameters and floor assignments applied. "
+                        "Dashboard, Spatial View, and Unit Impact now reflect the changes."
+                    )
+                    st.session_state.pop("cmp_matrix_results", None)
+                    st.rerun()
+            elif scenario.is_locked:
+                st.warning("Cannot adopt — scenario is locked.")
+
+    st.divider()
+
+    # =========================================================================
+    # SECTION 10: AI Insights
+    # =========================================================================
     with st.expander("Co-location Insights", expanded=True):
         st.caption(
             "Which units are best suited to share a floor? "
@@ -619,7 +830,6 @@ def render(sidebar_state):
 
     st.divider()
 
-    # --- Attendance Anomalies ---
     with st.expander("Attendance Anomalies", expanded=True):
         st.caption(
             "Flags units with statistically unusual attendance patterns using z-scores. "

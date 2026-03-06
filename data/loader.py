@@ -5,6 +5,7 @@ from typing import List, Tuple
 from models.building import Floor
 from models.unit import Unit
 from models.attendance import AttendanceProfile
+from models.daily_attendance import DailyAttendanceRecord
 
 
 def parse_buildings(df: pd.DataFrame) -> List[Floor]:
@@ -109,6 +110,24 @@ def load_multi_sheet_excel(uploaded_file) -> Tuple[pd.DataFrame, pd.DataFrame, p
     attendance_df = pd.read_excel(xl, sheet_name=attendance_sheet)
 
     return buildings_df, units_df, attendance_df
+
+
+def parse_daily_attendance(df: pd.DataFrame) -> List[DailyAttendanceRecord]:
+    """Convert a daily attendance DataFrame into DailyAttendanceRecord objects.
+
+    Expected columns: Date, Unit Name, In-Office Count.
+    Date column is parsed flexibly (YYYY-MM-DD, MM/DD/YYYY, etc.).
+    """
+    df = df.copy()
+    df["Date"] = pd.to_datetime(df["Date"])
+    records = []
+    for _, row in df.iterrows():
+        records.append(DailyAttendanceRecord(
+            date=row["Date"].date(),
+            unit_name=str(row["Unit Name"]).strip(),
+            in_office_count=int(row["In-Office Count"]),
+        ))
+    return records
 
 
 def load_csv_path(path: str) -> pd.DataFrame:

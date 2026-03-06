@@ -29,6 +29,8 @@ def generate_scenario_report(
     attendance_map: Dict[str, AttendanceProfile],
     rule_config: dict,
     opt_history: Optional[list] = None,
+    daily_attendance_df=None,
+    matrix_results: Optional[list] = None,
 ) -> bytes:
     """
     Build a multi-sheet Excel report for management review.
@@ -39,6 +41,8 @@ def generate_scenario_report(
     3. Floor Assignments — where each unit is placed
     4. Risks & Alerts — capacity and RTO issues
     5. Optimization Run — most recent optimization result (if available)
+    6. Demand Forecast — per-unit forecast summary (if daily_attendance_df provided)
+    7. Scenario Comparison — ranked matrix run results (if matrix_results provided)
 
     Returns bytes suitable for st.download_button.
     """
@@ -51,6 +55,10 @@ def generate_scenario_report(
         _write_risks_alerts(writer, scenario, units, attendance_map, rule_config)
         if opt_history:
             _write_optimization_run(writer, opt_history[0])
+        if daily_attendance_df is not None:
+            _write_demand_forecast(writer, daily_attendance_df)
+        if matrix_results:
+            _write_scenario_comparison(writer, matrix_results)
 
     return output.getvalue()
 
@@ -252,3 +260,79 @@ def _write_optimization_run(writer, run: dict):
     if result and result.before_after:
         ba_df = pd.DataFrame(result.before_after)
         ba_df.to_excel(writer, sheet_name="Optimization Run", index=False, startrow=len(rows) + 3)
+
+
+def _write_demand_forecast(writer, daily_df):
+    """Sheet: per-unit demand forecast summary from daily attendance data."""
+    try:
+        from engine.forecasting import compute_forecast_summary
+        import numpy as np
+
+        unit_names = sorted(daily_df["unit_name"].unique())
+        summaries = compute_forecast_summary(daily_df, unit_names, forecast_months=6)
+
+        if not summaries:
+            pd.DataFrame([{"Note": "Insufficient daily data for forecasting (need ≥7 days per unit)."}]).to_excel(
+                writer, sheet_name="Demand Forecast", index=False
+            )
+            return
+
+        rows = []
+        for s in summaries:
+            # Also get trend slope
+            from engine.forecasting import compute_unit_trend
+            trend = compute_unit_trend(daily_df, s["unit_name"], forecast_months=6)
+            rows.append({
+                "Unit": s["unit_name"],
+                "Current Median": s["current_median"],
+                "Current Peak": s["current_peak"],
+                "Forecasted Median (6m)": s["forecasted_median"],
+                "Forecasted Peak (6m)": s["forecasted_peak"],
+                "Suggested Annual Growth %": f"{s['suggested_growth_pct']:.1%}",
+                "Trend Slope (seats/day)": f"{trend['trend_slope']:+.3f}" if trend else "—",
+            })
+
+        pd.DataFrame(rows).to_excel(writer, sheet_name="Demand Forecast", index=False)
+    except Exception:
+        pd.DataFrame([{"Note": "Demand forecast data unavailable."}]).to_excel(
+            writer, sheet_name="Demand Forecast", index=False
+        )
+
+
+def _write_scenario_comparison(writer, matrix_results: list):
+    """Sheet: ranked scenario comparison matrix results."""
+    _PRIVATE_KEYS = {"_assignments", "_unit_allocations", "_temp_scenario", "_rc"}
+
+    obj_labels = {
+        "optimal_placement": "Optimal Placement",
+        "rto_based": "RTO-Based",
+        "rto_whatif": "What-If RTO",
+    }
+
+    rows = []
+    for r in matrix_results:
+        rows.append({
+            "Rank": r.get("rank", "—"),
+            "Alloc %": f"{r['alloc_pct']:.0%}" if r.get("alloc_pct") is not None else "N/A",
+            "RTO (days/wk)": r.get("rto_mandate", "—"),
+            "Capacity Reduction": f"{r.get('cap_red', 0):.0%}",
+            "Mode": obj_labels.get(r.get("objective", ""), r.get("objective", "—")),
+            "Demand (seats)": r.get("demand", "—"),
+            "Capacity (seats)": r.get("capacity", "—"),
+            "Headroom": r.get("headroom", "—"),
+            "Total Gap": r.get("total_gap", "—"),
+            "Units at Risk": r.get("units_at_risk", "—"),
+            "Optimized Seats": r.get("opt_seats", "—"),
+            "Floors Used": r.get("floors_used", "—"),
+            "Avg Fragmentation": r.get("avg_fragmentation", "—"),
+            "Seats Saved": r.get("seats_saved", "—"),
+            "Optimizer Status": r.get("opt_status", "—"),
+            "Composite Score": f"{r.get('composite_score', 0):.3f}",
+        })
+
+    if rows:
+        pd.DataFrame(rows).to_excel(writer, sheet_name="Scenario Comparison", index=False)
+    else:
+        pd.DataFrame([{"Note": "No scenario comparison results available."}]).to_excel(
+            writer, sheet_name="Scenario Comparison", index=False
+        )

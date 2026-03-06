@@ -238,7 +238,9 @@ def _executive_summary_text(scenario, floors, allocs, opt_history=None):
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 def generate_pdf_report(scenario, floors, units, attendance_map,
-                        rule_config, opt_history=None) -> bytes:
+                        rule_config, opt_history=None,
+                        daily_attendance_df=None,
+                        matrix_results=None) -> bytes:
     """Generate a boardroom-ready PDF and return it as bytes."""
 
     buf = io.BytesIO()
@@ -736,6 +738,142 @@ def generate_pdf_report(scenario, floors, units, attendance_map,
                                     _anom_row_bg))
     except Exception:
         pass  # Graceful degradation
+
+    # ── PAGE: DEMAND FORECAST SUMMARY ─────────────────────────────────────────
+    if daily_attendance_df is not None:
+        try:
+            from engine.forecasting import compute_forecast_summary, compute_unit_trend
+
+            unit_names_fc = sorted(daily_attendance_df["unit_name"].unique())
+            summaries_fc = compute_forecast_summary(daily_attendance_df, unit_names_fc, forecast_months=6)
+
+            if summaries_fc:
+                story.append(PageBreak())
+                story.append(_header_table("CPG Seat Planning Report",
+                                           scenario.name, report_date, styles))
+                story.extend(_section_header("Demand Forecast Summary", styles))
+                story.append(Paragraph(
+                    "Based on linear regression of daily in-office attendance data. "
+                    "Forecasted values project the current trend forward 6 months. "
+                    "Suggested Growth % is the annualised trend slope relative to current median.",
+                    caption))
+                story.append(Spacer(1, 0.3 * cm))
+
+                fc_header = ["Unit", "Cur Median", "Cur Peak",
+                             "Fcast Median (6m)", "Fcast Peak (6m)",
+                             "Growth %", "Slope (seats/day)"]
+                fc_col_widths = ["20%", "11%", "11%", "15%", "15%", "12%", "16%"]
+                fc_data = []
+                for s in summaries_fc:
+                    trend_fc = compute_unit_trend(daily_attendance_df, s["unit_name"], forecast_months=6)
+                    slope_str = f"{trend_fc['trend_slope']:+.3f}" if trend_fc else "—"
+                    fc_data.append([
+                        s["unit_name"],
+                        str(s["current_median"]),
+                        str(s["current_peak"]),
+                        str(s["forecasted_median"]),
+                        str(s["forecasted_peak"]),
+                        f"{s['suggested_growth_pct']:.1%}",
+                        slope_str,
+                    ])
+
+                def _fc_row_bg(i, row):
+                    # Highlight positive growth in light green, negative in light amber
+                    summaries_fc_sorted = summaries_fc
+                    g = summaries_fc_sorted[i]["suggested_growth_pct"] if i < len(summaries_fc_sorted) else 0
+                    if g > 0.05:
+                        return colors.HexColor("#E8F5E9")
+                    if g < -0.02:
+                        return AMBER_BG
+                    return GREY_ROW if i % 2 == 0 else WHITE
+
+                story.append(_std_table(fc_header, fc_data, fc_col_widths, _fc_row_bg))
+        except Exception:
+            pass  # Graceful degradation if forecasting fails
+
+    # ── PAGE: SCENARIO COMPARISON MATRIX ──────────────────────────────────────
+    if matrix_results:
+        try:
+            from engine.scenario_comparison import get_best_scenario, build_explanation
+
+            story.append(PageBreak())
+            story.append(_header_table("CPG Seat Planning Report",
+                                       scenario.name, report_date, styles))
+            story.extend(_section_header("Scenario Comparison Matrix", styles))
+            story.append(Paragraph(
+                "All parameter combinations were automatically run through the full simulation "
+                "and optimization pipeline. Ranked by composite score: "
+                "headroom (35%), gap (35%), fragmentation (15%), consolidation (15%).",
+                caption))
+            story.append(Spacer(1, 0.3 * cm))
+
+            # Best scenario callout box
+            best_cmp = get_best_scenario(matrix_results)
+            if best_cmp and not best_cmp.get("opt_status", "").startswith("Error"):
+                obj_short = {
+                    "optimal_placement": "Optimal Placement",
+                    "rto_based": "RTO-Based",
+                    "rto_whatif": "What-If RTO",
+                }.get(best_cmp.get("objective", ""), best_cmp.get("objective", ""))
+                alloc_str = (f"Alloc {best_cmp['alloc_pct']:.0%}, "
+                             if best_cmp.get("alloc_pct") is not None else "")
+                best_text = (
+                    f"<b>Best Scenario #{best_cmp['rank']}:</b> "
+                    f"{alloc_str}"
+                    f"RTO {best_cmp['rto_mandate']:.1f}d/wk, "
+                    f"Cap Red {best_cmp['cap_red']:.0%}, {obj_short}  —  "
+                    f"{build_explanation(best_cmp)}"
+                )
+                best_style = ParagraphStyle(
+                    "best_cmp", parent=body,
+                    fontSize=9, leading=13,
+                    backColor=GREEN_BG,
+                    borderPadding=8, spaceBefore=4, spaceAfter=8,
+                )
+                story.append(Paragraph(best_text, best_style))
+                story.append(Spacer(1, 0.3 * cm))
+
+            # Ranked table
+            cmp_header = ["Rank", "Alloc %", "RTO", "Cap Red", "Mode",
+                          "Demand", "Capacity", "Headroom", "Gap",
+                          "Opt Seats", "Floors", "Score"]
+            cmp_col_widths = ["7%", "8%", "7%", "8%", "11%",
+                              "8%", "8%", "9%", "8%",
+                              "9%", "7%", "10%"]
+
+            obj_abbr = {
+                "optimal_placement": "Optimal",
+                "rto_based": "RTO-Based",
+                "rto_whatif": "What-If",
+            }
+            cmp_data = []
+            for r in matrix_results:
+                cmp_data.append([
+                    str(r.get("rank", "—")),
+                    f"{r['alloc_pct']:.0%}" if r.get("alloc_pct") is not None else "N/A",
+                    f"{r['rto_mandate']:.1f}d",
+                    f"{r.get('cap_red', 0):.0%}",
+                    obj_abbr.get(r.get("objective", ""), r.get("objective", "—")),
+                    f"{r.get('demand', 0):,}",
+                    f"{r.get('capacity', 0):,}",
+                    f"{r.get('headroom', 0):+,}",
+                    f"{r.get('total_gap', 0):+,}",
+                    f"{r.get('opt_seats', 0):,}",
+                    str(r.get("floors_used", "—")),
+                    f"{r.get('composite_score', 0):.3f}",
+                ])
+
+            def _cmp_row_bg(i, row):
+                r = matrix_results[i]
+                if r.get("rank") == 1:
+                    return GREEN_BG
+                if r.get("opt_status", "").startswith("Error"):
+                    return RED_BG
+                return GREY_ROW if i % 2 == 0 else WHITE
+
+            story.append(_std_table(cmp_header, cmp_data, cmp_col_widths, _cmp_row_bg))
+        except Exception:
+            pass  # Graceful degradation
 
     doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
     return buf.getvalue()

@@ -10,6 +10,7 @@ from data.session_store import (
     get_rule_config, update_scenario, add_audit_entry, is_data_loaded,
     get_active_scenario_id, get_last_data_edit,
     add_scenario, remove_scenario, set_active_scenario_id,
+    get_daily_attendance_df,
 )
 from models.scenario import Scenario, ScenarioOverride, ScenarioParams
 from engine.scenario_engine import run_scenario, compare_scenarios, apply_overrides
@@ -559,18 +560,32 @@ def render(sidebar_state):
         # --- Download Report ---
         st.divider()
         with st.expander("Download Report", expanded=False):
-            st.caption(
-                "Export an Excel report of this scenario for management review. "
-                "Includes allocation results, floor assignments, risks, and the most recent optimization run (if any)."
-            )
+            daily_df_report = get_daily_attendance_df()
+            matrix_results_report = st.session_state.get("cmp_matrix_results")
+
+            # Dynamic caption listing which sections will be included
+            included = ["allocation results", "floor assignments", "risks"]
             opt_history = st.session_state.get("optimization_history", [])
+            if opt_history:
+                included.append("optimization run")
+            if daily_df_report is not None:
+                included.append("demand forecast")
+            if matrix_results_report:
+                included.append(f"scenario comparison ({len(matrix_results_report)} runs)")
+            st.caption("Export includes: " + ", ".join(included) + ".")
+
+            att_map_report = {a.unit_name: a for a in attendance_profiles}
+            rc_report = get_rule_config()
+
             report_bytes = generate_scenario_report(
                 scenario=scenario,
                 floors=floors,
                 units=units,
-                attendance_map={a.unit_name: a for a in attendance_profiles},
-                rule_config=get_rule_config(),
+                attendance_map=att_map_report,
+                rule_config=rc_report,
                 opt_history=opt_history if opt_history else None,
+                daily_attendance_df=daily_df_report,
+                matrix_results=matrix_results_report,
             )
             file_name = f"scenario_{scenario.name.replace(' ', '_')}_{date.today()}.xlsx"
             st.download_button(
@@ -587,9 +602,11 @@ def render(sidebar_state):
                 scenario=scenario,
                 floors=floors,
                 units=units,
-                attendance_map={a.unit_name: a for a in attendance_profiles},
-                rule_config=get_rule_config(),
+                attendance_map=att_map_report,
+                rule_config=rc_report,
                 opt_history=opt_history if opt_history else None,
+                daily_attendance_df=daily_df_report,
+                matrix_results=matrix_results_report,
             )
             pdf_name = f"scenario_{scenario.name.replace(' ', '_')}_{date.today()}.pdf"
             st.download_button(

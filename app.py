@@ -13,10 +13,10 @@ from tabs import (
     tab_executive_dashboard,
     tab_unit_impact,
     tab_spatial_floor,
-    tab_scenario_lab,
     tab_optimization,
     tab_admin_governance,
     tab_forecasting,
+    tab_floor_sandbox,
 )
 
 
@@ -43,7 +43,7 @@ div.block-container, div[data-testid="stMainBlockContainer"] {
 .stTabs [data-baseweb="tab-panel"] {
     padding-top: 0.5rem !important;
 }
-/* Smaller tab labels so all 7 fit in one row */
+/* Smaller tab labels so all 6 fit in one row */
 button[data-baseweb="tab"] {
     font-size: 0.72rem !important;
     padding-left: 0.6rem !important;
@@ -58,26 +58,26 @@ footer { display: none !important; }
 
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📊 Executive Dashboard",
-        "🧪 Scenario Lab",
         "🤖 What-If Analysis",
         "🏗️ Spatial / Floor View",
         "👥 Unit Impact View",
         "📈 Demand Analytics",
+        "🗂️ Floor Plan Sandbox",
         "⚙️ Admin",
     ])
 
     with tab1:
         tab_executive_dashboard.render(sidebar_state)
     with tab2:
-        tab_scenario_lab.render(sidebar_state)
-    with tab3:
         tab_optimization.render(sidebar_state)
-    with tab4:
+    with tab3:
         tab_spatial_floor.render(sidebar_state)
-    with tab5:
+    with tab4:
         tab_unit_impact.render(sidebar_state)
-    with tab6:
+    with tab5:
         tab_forecasting.render(sidebar_state)
+    with tab6:
+        tab_floor_sandbox.render(sidebar_state)
     with tab7:
         tab_admin_governance.render(sidebar_state)
 

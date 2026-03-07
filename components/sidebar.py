@@ -73,7 +73,7 @@ def render_sidebar() -> SidebarState:
             if active.last_run_at:
                 st.caption(f"Last run: {active.last_run_at.strftime('%b %d, %H:%M')}")
             else:
-                st.caption("Not yet run — go to Scenario Lab")
+                st.caption("Not yet run — go to What-If Analysis")
 
     return SidebarState(
         scenario_id=selected_id,

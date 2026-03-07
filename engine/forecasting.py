@@ -8,6 +8,7 @@ from config.defaults import (
     FORECAST_EMA_SPAN,
     FORECAST_CONFIDENCE_LEVELS,
     FORECAST_BOOTSTRAP_SAMPLES,
+    DOW_OVERLOAD_FACTOR,
 )
 
 
@@ -246,13 +247,19 @@ def compute_forecast_summary(
 def compute_week_ahead_forecast(
     df: pd.DataFrame,
     total_capacity: int = 0,
+    n_days: int = 5,
+    holiday_dates: Optional[List[str]] = None,
 ) -> List[dict]:
-    """Next 5 working-day attendance forecast using DOW patterns + overall trend.
+    """Working-day attendance forecast using DOW patterns + overall trend.
 
     Uses historical day-of-week medians (summed across all units) and applies
     the overall trend slope as a recency adjustment.
 
-    Returns list of dicts (Mon→Fri next week), one per working day:
+    Args:
+        n_days: Number of upcoming business days to forecast (default 5).
+        holiday_dates: Optional list of date strings (YYYY-MM-DD) to skip.
+
+    Returns list of dicts per working day:
         date, weekday_name, short_label, expected_seats, capacity_pct, status
     Returns [] if insufficient data (< 7 weekday records).
     """
@@ -272,12 +279,21 @@ def compute_week_ahead_forecast(
         .to_dict()
     )
 
-    # Find next 5 working days (Mon=0 … Fri=4)
+    # Build holiday set for fast lookup
+    holiday_set = set()
+    if holiday_dates:
+        for h in holiday_dates:
+            try:
+                holiday_set.add(pd.Timestamp(h).date())
+            except Exception:
+                pass
+
+    # Find next n_days working days, skipping holidays
     today = datetime.now().date()
     upcoming: List = []
     d = today + timedelta(days=1)
-    while len(upcoming) < 5:
-        if d.weekday() < 5:
+    while len(upcoming) < n_days:
+        if d.weekday() < 5 and d not in holiday_set:
             upcoming.append(d)
         d += timedelta(days=1)
 
@@ -296,6 +312,175 @@ def compute_week_ahead_forecast(
             "status": status,
         })
     return results
+
+
+def compute_per_unit_forecast(
+    df: pd.DataFrame,
+    n_days: int = 5,
+    holiday_dates: Optional[List[str]] = None,
+) -> List[dict]:
+    """Per-unit attendance forecast for the next n_days business days.
+
+    Uses per-unit DOW medians + unit-level trend slope as recency adjustment.
+
+    Returns List[dict]: unit_name, date, short_label, weekday_name, expected_seats.
+    Returns [] if insufficient data.
+    """
+    from datetime import datetime, timedelta
+
+    dow_df = compute_dow_patterns(df)
+    if dow_df.empty:
+        return []
+
+    # Build per-unit DOW medians: {unit_name: {dow_int: median}}
+    unit_dow: dict = {}
+    for _, row in dow_df.iterrows():
+        unit_dow.setdefault(row["unit_name"], {})[int(row["day_of_week"])] = float(row["median_count"])
+
+    # Per-unit trend slopes
+    unit_slopes: dict = {}
+    for unit in unit_dow:
+        trend = compute_unit_trend(df, unit, forecast_months=1)
+        unit_slopes[unit] = trend["trend_slope"] if trend else 0.0
+
+    # Build holiday set
+    holiday_set = set()
+    if holiday_dates:
+        for h in holiday_dates:
+            try:
+                holiday_set.add(pd.Timestamp(h).date())
+            except Exception:
+                pass
+
+    # Find next n_days business days
+    today = datetime.now().date()
+    upcoming = []
+    d = today + timedelta(days=1)
+    while len(upcoming) < n_days:
+        if d.weekday() < 5 and d not in holiday_set:
+            upcoming.append(d)
+        d += timedelta(days=1)
+
+    results = []
+    for i, day in enumerate(upcoming):
+        for unit, dow_medians in unit_dow.items():
+            base = dow_medians.get(day.weekday(), 0.0)
+            slope = unit_slopes.get(unit, 0.0)
+            expected = max(0, round(base + slope * (i + 1)))
+            results.append({
+                "unit_name": unit,
+                "date": day,
+                "short_label": day.strftime("%a %b %d"),
+                "weekday_name": day.strftime("%A"),
+                "expected_seats": expected,
+            })
+
+    return results
+
+
+def compute_peak_day_per_unit(df: pd.DataFrame) -> List[dict]:
+    """Identify the peak day-of-week for each unit based on historical medians.
+
+    Returns List[dict]: unit_name, peak_day_name, peak_day_median, overall_median, peak_ratio.
+    """
+    dow_df = compute_dow_patterns(df)
+    if dow_df.empty:
+        return []
+
+    results = []
+    for unit_name in dow_df["unit_name"].unique():
+        unit_dow = dow_df[dow_df["unit_name"] == unit_name]
+        if unit_dow.empty:
+            continue
+        peak_row = unit_dow.loc[unit_dow["median_count"].idxmax()]
+        overall_median = float(unit_dow["median_count"].mean())
+        peak_median = float(peak_row["median_count"])
+        peak_ratio = round(peak_median / overall_median, 2) if overall_median > 0 else 1.0
+        results.append({
+            "unit_name": unit_name,
+            "peak_day_name": peak_row["day_name"],
+            "peak_day_median": round(peak_median),
+            "overall_median": round(overall_median),
+            "peak_ratio": peak_ratio,
+        })
+
+    return results
+
+
+def compute_dow_conflict_analysis(df: pd.DataFrame) -> dict:
+    """Detect cross-unit peak day conflicts and generate stagger suggestions.
+
+    Identifies days where company-wide load significantly exceeds average
+    (by DOW_OVERLOAD_FACTOR), then suggests alternative days per unit.
+
+    Returns dict with:
+        day_loads: {day_name: total_median_seats}  (Mon–Fri)
+        peak_units_by_day: {day_name: [unit_name, ...]}
+        suggestions: List[dict] — unit_name, current_peak_day, suggested_day, load_reduction
+        overloaded_days: List[str]
+    """
+    peak_data = compute_peak_day_per_unit(df)
+    if not peak_data:
+        return {"day_loads": {}, "peak_units_by_day": {}, "suggestions": [], "overloaded_days": []}
+
+    dow_df = compute_dow_patterns(df)
+    day_order = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+
+    # Company-wide load per day (sum of all unit medians for each day)
+    day_totals: dict = {d: 0.0 for d in day_order}
+    # Per-unit DOW medians: {unit_name: {day_name: median}}
+    unit_day_medians: dict = {}
+    for _, row in dow_df.iterrows():
+        unit = row["unit_name"]
+        day = row["day_name"]
+        median = float(row["median_count"])
+        day_totals[day] = day_totals.get(day, 0.0) + median
+        unit_day_medians.setdefault(unit, {})[day] = median
+
+    # Identify overloaded days
+    valid_loads = [v for v in day_totals.values() if v > 0]
+    if not valid_loads:
+        return {"day_loads": day_totals, "peak_units_by_day": {}, "suggestions": [], "overloaded_days": []}
+
+    mean_load = float(np.mean(valid_loads))
+    overloaded_days = [d for d in day_order if day_totals.get(d, 0) > mean_load * DOW_OVERLOAD_FACTOR]
+
+    # Peak units by day (all days, not just overloaded)
+    peak_by_day: dict = {d: [] for d in day_order}
+    for p in peak_data:
+        peak_by_day[p["peak_day_name"]].append(p["unit_name"])
+
+    # Stagger suggestions: for each unit peaking on an overloaded day,
+    # suggest the lowest company-load alternative day
+    suggestions = []
+    for p in peak_data:
+        unit = p["unit_name"]
+        current_peak_day = p["peak_day_name"]
+        if current_peak_day not in overloaded_days:
+            continue
+
+        unit_days = unit_day_medians.get(unit, {})
+        alternatives = [(d, day_totals.get(d, 0.0)) for d in day_order if d != current_peak_day]
+        alternatives.sort(key=lambda x: x[1])  # sort by company-wide load ascending
+
+        if not alternatives:
+            continue
+
+        suggested_day = alternatives[0][0]
+        load_on_peak = unit_days.get(current_peak_day, 0.0)
+        suggestions.append({
+            "unit_name": unit,
+            "current_peak_day": current_peak_day,
+            "suggested_day": suggested_day,
+            "load_reduction": round(load_on_peak),
+        })
+
+    return {
+        "day_loads": {d: round(day_totals.get(d, 0)) for d in day_order},
+        "peak_units_by_day": {d: v for d, v in peak_by_day.items() if v},
+        "suggestions": suggestions,
+        "overloaded_days": overloaded_days,
+    }
 
 
 # ── Demand Correlation ────────────────────────────────────────────────────

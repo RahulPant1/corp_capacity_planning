@@ -655,45 +655,6 @@ def generate_pdf_report(scenario, floors, units, attendance_map,
             story.append(_std_table(ba_header, ba_data,
                                     ["40%", "20%", "20%", "20%"]))
 
-    # ── PAGE: ATTENDANCE ANOMALIES ───────────────────────────────────────────
-    try:
-        from engine.anomaly import detect_attendance_anomalies
-
-        anomalies_pdf = detect_attendance_anomalies(units, attendance_map)
-        if anomalies_pdf:
-            story.append(PageBreak())
-            story.append(_header_table("CPG Seat Planning Report",
-                                       scenario.name, report_date, styles))
-            story.extend(_section_header("Attendance Anomalies", styles))
-            story.append(Paragraph(
-                "Units flagged for statistically unusual attendance patterns "
-                "(more than 2 standard deviations from the mean).",
-                caption))
-            story.append(Spacer(1, 0.2 * cm))
-
-            anom_header = ["Unit", "Metric", "Value", "Z-Score", "Type", "Recommendation"]
-            anom_data = []
-            for a in anomalies_pdf:
-                anom_data.append([
-                    a["unit_name"], a["metric"],
-                    str(a["value"]), f"{a['z_score']:+.2f}",
-                    a["anomaly_type"], a["recommendation"],
-                ])
-
-            def _anom_row_bg(i, _row):
-                z = abs(anomalies_pdf[i]["z_score"])
-                if z > 3:
-                    return RED_BG
-                elif z > 2:
-                    return AMBER_BG
-                return GREY_ROW if i % 2 == 0 else WHITE
-
-            story.append(_std_table(anom_header, anom_data,
-                                    ["12%", "14%", "8%", "10%", "24%", "32%"],
-                                    _anom_row_bg))
-    except Exception:
-        pass  # Graceful degradation
-
     # ── PAGE: DEMAND FORECAST SUMMARY ─────────────────────────────────────────
     if daily_attendance_df is not None:
         try:

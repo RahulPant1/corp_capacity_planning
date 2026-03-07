@@ -94,6 +94,11 @@ def is_data_loaded() -> bool:
     return st.session_state.get("data_loaded", False)
 
 
+def get_cluster_map() -> dict:
+    """Return {unit_name: cluster_id} if clusters have been computed in Demand Analytics."""
+    return st.session_state.get("unit_cluster_map", {})
+
+
 def get_last_data_edit():
     return st.session_state.get("last_data_edit_at")
 

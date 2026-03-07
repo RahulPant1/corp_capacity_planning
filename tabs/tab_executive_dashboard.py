@@ -129,7 +129,7 @@ def render(sidebar_state):
 
     scenario = get_active_scenario()
     if not scenario or not scenario.allocation_results:
-        st.info("No allocation results available. Run a simulation from the Scenario Lab.")
+        st.info("No allocation results available. Run a Policy Simulation from the What-If Analysis tab.")
         return
 
     # Stale-data warning
@@ -137,7 +137,7 @@ def render(sidebar_state):
     if last_edit and (scenario.last_run_at is None or last_edit > scenario.last_run_at):
         st.warning(
             "Base data has changed since the last simulation. "
-            "Go to Scenario Lab and re-run to see updated results."
+            "Go to What-If Analysis and re-run to see updated results."
         )
 
     allocations = scenario.allocation_results
@@ -371,19 +371,6 @@ def render(sidebar_state):
                 "Detail": f"Across {', '.join(detail_parts)}",
             })
 
-    # Attendance anomaly alerts
-    from engine.anomaly import detect_attendance_anomalies, get_anomaly_summary
-    att_map_anom = {a.unit_name: a for a in attendance_profiles}
-    anomalies = detect_attendance_anomalies(units, att_map_anom)
-    anomaly_summary = get_anomaly_summary(anomalies)
-
-    for anom in anomalies:
-        other_alerts.append({
-            "Unit": anom["unit_name"],
-            "Alert": f"Anomaly: {anom['anomaly_type']}",
-            "Detail": f"Z-score: {anom['z_score']:+.2f} ({anom['metric']} = {anom['value']})",
-        })
-
     has_any = capacity_alerts or rto_all_data or other_alerts
 
     st.subheader("Planning Alerts")
@@ -423,13 +410,11 @@ def render(sidebar_state):
                 f'<span style="font-size:0.72em;color:#666;">Allocation vs attendance-based need</span>'
                 f'</div>', unsafe_allow_html=True)
         with c3:
-            anom_count = anomaly_summary.get("total_anomalies", 0)
-            anom_suffix = f" &amp; {anom_count} anomalies" if anom_count else ""
             st.markdown(
                 f'<div style="{card_css}background:{oth_bg};border-left:4px solid {oth_bdr};">'
                 f'<span style="font-size:1.25em;font-weight:700;">⚠️ {oth_count}</span><br/>'
                 f'<span style="font-size:0.78em;color:#444;">Other Alerts</span><br/>'
-                f'<span style="font-size:0.72em;color:#666;">Fragmentation, cross-building spread{anom_suffix}</span>'
+                f'<span style="font-size:0.72em;color:#666;">Fragmentation &amp; cross-building spread</span>'
                 f'</div>', unsafe_allow_html=True)
 
         st.markdown("<div style='margin-top:10px;'></div>", unsafe_allow_html=True)

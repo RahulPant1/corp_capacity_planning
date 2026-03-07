@@ -106,7 +106,13 @@ def run_scenario(
 
     # Assign to floors
     excluded_ids = list(set(scenario.params.excluded_floors))
-    assignments, frag_scores = assign_units_to_floors(allocations, floors, excluded_ids)
+    cluster_map = (rule_config or {}).get("cluster_map") or None
+    diversity_weight = (rule_config or {}).get("cluster_diversity_weight", 800)
+    assignments, frag_scores = assign_units_to_floors(
+        allocations, floors, excluded_ids,
+        cluster_map=cluster_map,
+        diversity_weight=diversity_weight,
+    )
 
     # Store results
     scenario.allocation_results = allocations

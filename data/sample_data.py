@@ -4,6 +4,19 @@ import pandas as pd
 import random
 import os
 
+# Sample holiday dates within the 90-day window starting 2025-07-01
+# (used to validate holiday-skip logic in short-term forecasting)
+SAMPLE_HOLIDAY_DATES = [
+    "2025-07-04",   # Independence Day
+    "2025-09-01",   # Labor Day
+    "2025-11-27",   # Thanksgiving
+]
+
+
+def get_sample_holiday_dates() -> list:
+    """Return the list of sample holiday date strings."""
+    return list(SAMPLE_HOLIDAY_DATES)
+
 
 def generate_buildings_df() -> pd.DataFrame:
     """Generate building/floor master data: 2 buildings, 2 towers each, 5 floors per tower."""

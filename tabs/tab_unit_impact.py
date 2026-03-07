@@ -42,7 +42,7 @@ def render(sidebar_state):
 
     scenario = get_active_scenario()
     if not scenario or not scenario.allocation_results:
-        st.info("No allocation results available. Run a simulation from the Scenario Lab.")
+        st.info("No allocation results available. Run a Policy Simulation from the What-If Analysis tab.")
         return
 
     allocations = scenario.allocation_results
@@ -195,38 +195,3 @@ def render(sidebar_state):
                 } for a in unit_floors]
                 st.dataframe(pd.DataFrame(floor_data), use_container_width=True)
 
-    st.divider()
-
-    # --- Attendance Anomalies (AI) ---
-    with st.expander("Attendance Anomalies", expanded=False):
-        st.caption(
-            "Flags units with statistically unusual attendance patterns using z-scores. "
-            "Units more than 2 standard deviations from the mean on any metric are flagged."
-        )
-
-        from engine.anomaly import detect_attendance_anomalies
-
-        att_map_anom = {a.unit_name: a for a in attendance_profiles}
-        anomalies = detect_attendance_anomalies(units, att_map_anom)
-
-        if anomalies:
-            anom_rows = []
-            for a in anomalies:
-                anom_rows.append({
-                    "Unit": a["unit_name"],
-                    "Metric": a["metric"],
-                    "Value": a["value"],
-                    "Z-Score": a["z_score"],
-                    "Anomaly Type": a["anomaly_type"],
-                    "Recommendation": a["recommendation"],
-                })
-
-            df_anom = pd.DataFrame(anom_rows)
-            st.dataframe(df_anom, use_container_width=True, hide_index=True)
-
-            st.markdown(
-                f"**{len(anomalies)} anomalies detected** across "
-                f"{len(set(a['unit_name'] for a in anomalies))} unit(s)."
-            )
-        else:
-            st.success("No attendance anomalies detected — all units within normal ranges.")

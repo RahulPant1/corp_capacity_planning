@@ -289,19 +289,92 @@ def probabilistic_demand_bar(
     return fig
 
 
+def temporal_cluster_dow_chart(
+    cluster_data: List[dict],
+    dow_df: pd.DataFrame,
+) -> go.Figure:
+    """Grouped bar chart: average Mon–Fri attendance profile per temporal cluster.
+
+    Args:
+        cluster_data: list of dicts with keys unit_name, cluster_label
+        dow_df: output of compute_dow_patterns() — unit_name, day_name, median_count
+    """
+    palette = ["#4A90D9", "#E8734A", "#2ECC71", "#9B59B6", "#F39C12", "#1ABC9C"]
+    cluster_map = {row["unit_name"]: row["cluster_label"] for row in cluster_data}
+
+    work = dow_df.copy()
+    work["cluster"] = work["unit_name"].map(cluster_map)
+    work = work.dropna(subset=["cluster"])
+    if work.empty:
+        return go.Figure()
+
+    day_order = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    work["day_name"] = pd.Categorical(work["day_name"], categories=day_order, ordered=True)
+    agg = (
+        work.groupby(["cluster", "day_name"], observed=True)["median_count"]
+        .mean()
+        .reset_index()
+        .sort_values(["cluster", "day_name"])
+    )
+
+    clusters = sorted(agg["cluster"].unique())
+    fig = go.Figure()
+    for i, cluster in enumerate(clusters):
+        cdf = agg[agg["cluster"] == cluster]
+        fig.add_trace(go.Bar(
+            name=cluster,
+            x=cdf["day_name"],
+            y=cdf["median_count"],
+            marker_color=palette[i % len(palette)],
+            text=[f"{v:.0f}" for v in cdf["median_count"]],
+            textposition="outside",
+        ))
+
+    fig.update_layout(
+        barmode="group",
+        title="Average Attendance Profile by Cluster Group (Mon–Fri)",
+        xaxis_title="Day of Week",
+        yaxis_title="Avg In-Office Count",
+        height=380,
+        legend_title_text="Cluster",
+    )
+    return fig
+
+
 def correlation_heatmap_chart(corr_df: pd.DataFrame) -> go.Figure:
-    """Heatmap of pairwise demand correlation between units."""
+    """Upper-triangle heatmap of pairwise demand correlation between units.
+
+    Lower triangle is masked to reduce visual clutter.
+    Red = high positive (units peak together). Blue = negative (complementary).
+    """
+    import numpy as np
+
+    labels = corr_df.columns.tolist()
+    n = len(labels)
+    values = corr_df.values.astype(float)
+
+    # Mask lower triangle — show diagonal + upper only
+    masked = np.where(np.tril(np.ones((n, n)), k=-1).astype(bool), None, values)
+    text = [
+        [f"{values[i][j]:.2f}" if j >= i else "" for j in range(n)]
+        for i in range(n)
+    ]
+
     fig = go.Figure(data=go.Heatmap(
-        z=corr_df.values,
-        x=corr_df.columns.tolist(),
-        y=corr_df.index.tolist(),
+        z=masked,
+        x=labels,
+        y=labels,
         colorscale="RdBu_r", zmid=0, zmin=-1, zmax=1,
-        text=[[f"{v:.2f}" for v in row] for row in corr_df.values],
+        text=text,
         texttemplate="%{text}",
-        colorbar=dict(title="Correlation"),
+        hovertemplate="Unit A: %{y}<br>Unit B: %{x}<br>Correlation: %{z:.2f}<extra></extra>",
+        colorbar=dict(title="Correlation<br>(-1 to +1)"),
+        showscale=True,
     ))
     fig.update_layout(
-        title="Demand Correlation Between Units",
-        height=max(400, len(corr_df) * 50),
+        title="Demand Correlation (upper triangle)",
+        height=max(320, n * 46),
+        margin=dict(t=50, b=20),
+        yaxis=dict(autorange="reversed"),
     )
     return fig

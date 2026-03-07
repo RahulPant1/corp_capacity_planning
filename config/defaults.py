@@ -84,16 +84,15 @@ SENSITIVITY_HORIZON_VARIATIONS = [-6, -3, 3, 6]
 SENSITIVITY_CAPACITY_REDUCTIONS = [0.0, 0.05, 0.10, 0.15]
 SENSITIVITY_RTO_VARIATIONS = [-1.0, -0.5, 0.5, 1.0]
 
-# ── Anomaly detection ────────────────────────────────────────────────────────
-ANOMALY_Z_SCORE_THRESHOLD = 2.0
-ANOMALY_MIN_UNITS = 3
-
 # ── Demand Forecasting ───────────────────────────────────────────────────
 FORECAST_DEFAULT_MONTHS = 6
 FORECAST_CONFIDENCE_LEVELS = [0.90, 0.95, 0.99]
 FORECAST_BOOTSTRAP_SAMPLES = 1000
 FORECAST_MIN_DAILY_RECORDS = 30
 FORECAST_EMA_SPAN = 21
+FORECAST_SHORT_TERM_DAYS_OPTIONS = [5, 10, 15, 21]   # Horizon choices for short-term forecast
+FORECAST_CAPACITY_ALERT_THRESHOLD = 0.90              # Days above this % trigger a capacity risk alert
+DOW_OVERLOAD_FACTOR = 1.15                            # Day load > mean * factor = overloaded
 
 # ── Scenario Comparison Matrix ───────────────────────────────────────────
 COMPARISON_MAX_COMBINATIONS = 24

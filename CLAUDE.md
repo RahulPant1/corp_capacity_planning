@@ -9,10 +9,9 @@
 | Tab | File | Purpose |
 |-----|------|---------|
 | 📊 Executive Dashboard | tabs/tab_executive_dashboard.py | KPIs, 1-week forecast, alerts, AI brief |
-| 🧪 Scenario Lab | tabs/tab_scenario_lab.py | Scenario CRUD, simulation, report download |
-| 🤖 What-If Analysis | tabs/tab_optimization.py | LP optimizer + Scenario Comparison Matrix |
-| 🏗️ Spatial / Floor View | tabs/tab_spatial_floor.py | Floor utilization, co-location |
-| 👥 Unit Impact View | tabs/tab_unit_impact.py | Per-unit risk, anomaly detection |
+| 🤖 What-If Analysis | tabs/tab_optimization.py | Unit overrides, policy simulation, LP optimizer, Scenario Comparison Matrix, report download |
+| 🏗️ Spatial / Floor View | tabs/tab_spatial_floor.py | Floor utilization |
+| 👥 Unit Impact View | tabs/tab_unit_impact.py | Per-unit risk |
 | 📈 Demand Analytics | tabs/tab_forecasting.py | Trend forecast, probabilistic demand, DOW patterns |
 | ⚙️ Admin | tabs/tab_admin_governance.py | Data upload, rule config, audit trail |
 
@@ -32,7 +31,6 @@
 | scenario_engine.py | run_scenario(), apply_overrides(), apply_floor_modifications() |
 | scenario_comparison.py | run_scenario_matrix(), rank_scenarios(), get_best_scenario(), build_explanation() |
 | forecasting.py | compute_unit_trend(), compute_overall_trend(), compute_dow_patterns(), compute_week_ahead_forecast(), compute_forecast_summary(), compute_percentile_demand() |
-| anomaly.py | detect_attendance_anomalies() — z-score outlier detection |
 | spatial.py | get_floor_utilization(), get_consolidation_suggestions() |
 | sensitivity.py | run_sensitivity_analysis() — lean/balanced/conservative buffer presets |
 | report_generator.py | generate_scenario_report() → Excel bytes |
@@ -64,12 +62,13 @@ Matrix results: `st.session_state["cmp_matrix_results"]` (list of ranked scenari
 
 ## Typical Data Flow
 1. Admin: upload data → stored via session_store setters
-2. Scenario Lab: create scenario → run_scenario() → allocation_results + floor_assignments populated
-3. What-If Analysis: optimize_allocation() → OptimizationResult → "Accept & Apply" writes back to scenario
+2. What-If Analysis: set unit overrides → "Run Policy Simulation" → run_scenario() → allocation_results populated
+3. What-If Analysis: "Simulate & Optimize" → optimize_allocation() → OptimizationResult → "Accept & Apply" writes back to scenario
 4. Demand Analytics: upload daily CSV → compute_week_ahead_forecast() / compute_forecast_summary() → "Apply Forecasted Growth" pushes to scenario
 5. Scenario Comparison Matrix: run_scenario_matrix() → rank_scenarios() → stored as cmp_matrix_results
+6. What-If Analysis: "Download Report" → generates Excel/PDF including matrix results
 
-## Report Export (Scenario Lab → Download Report)
+## Report Export (What-If Analysis → Download Report)
 - Excel: generate_scenario_report(..., daily_attendance_df=..., matrix_results=...)
   Sheets: Summary, Allocation Results, Floor Assignments, Risks & Alerts, [Optimization Run], [Demand Forecast], [Scenario Comparison]
 - PDF: generate_pdf_report(..., daily_attendance_df=..., matrix_results=...)
@@ -79,6 +78,6 @@ Matrix results: `st.session_state["cmp_matrix_results"]` (list of ranked scenari
 - Every tab has a top-level `render(sidebar_state)` function
 - Guard all tabs: `if not is_data_loaded(): st.info(...); return`
 - Plotly charts use unique `key=` strings to avoid duplicate ID errors
-- Heavy imports (anomaly, forecasting) done inside functions, not at module level
+- Heavy imports (forecasting) done inside functions, not at module level
 - All data edits log via `add_audit_entry(scenario_name, action, ...)`
 - Optimizer results: `opt_result.assignments` (List[FloorAssignment]), `opt_result.unit_allocations` (dict), `opt_result.savings_summary` (dict), `opt_result.before_after` (list)

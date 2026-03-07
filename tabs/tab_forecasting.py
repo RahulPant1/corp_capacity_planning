@@ -8,22 +8,28 @@ from data.session_store import (
     is_data_loaded, get_units, get_attendance,
     get_daily_attendance_df, set_daily_attendance,
     get_active_scenario, update_scenario,
-    add_audit_entry,
+    add_audit_entry, get_floors, get_rule_config,
 )
 from data.loader import load_file, parse_daily_attendance
 from data.validator import validate_daily_attendance, validate_daily_attendance_cross
 from engine.forecasting import (
     compute_unit_trend, compute_overall_trend, compute_dow_patterns,
     compute_percentile_demand, bootstrap_confidence_interval,
-    compute_forecast_summary, compute_demand_correlation,
+    compute_forecast_summary,
     compute_capacity_breach_probability, compute_temporal_clustering,
+    compute_week_ahead_forecast, compute_per_unit_forecast,
+    compute_peak_day_per_unit, compute_dow_conflict_analysis,
 )
 from components.charts import (
     attendance_trend_chart, dow_heatmap_chart,
-    probabilistic_demand_bar, correlation_heatmap_chart,
+    probabilistic_demand_bar,
+    temporal_cluster_dow_chart,
 )
 from models.scenario import ScenarioOverride
-from config.defaults import FORECAST_CONFIDENCE_LEVELS, FORECAST_DEFAULT_MONTHS
+from config.defaults import (
+    FORECAST_CONFIDENCE_LEVELS, FORECAST_DEFAULT_MONTHS,
+    FORECAST_SHORT_TERM_DAYS_OPTIONS, FORECAST_CAPACITY_ALERT_THRESHOLD,
+)
 
 
 def render(sidebar_state):
@@ -38,11 +44,10 @@ def render(sidebar_state):
 - **Trend Analysis** — Linear regression + EMA on daily data → forecasted median/peak + suggested growth %
 - **Probabilistic Demand** — Instead of using peak attendance, compute 90th/95th/99th percentile → potential seat savings
 - **Day-of-Week Patterns** — Heatmap showing which days each unit is busiest (e.g., Tue/Wed peak)
-- **Demand Correlation** *(analyst view)* — Which units' attendance moves together (compete for seats on same days)
-- **Capacity Breach Risk** — Probability that daily attendance exceeds allocated seats
-- **Temporal Clusters** — Groups units by similar attendance behavior for hot-desking opportunities
+- **Capacity Breach Risk** — How often actual attendance overflows your allocated seats
+- **Temporal Clusters** — Groups units by similar attendance behavior; informs cluster-diverse floor placement
 
-**Integration:** Click *Apply Forecasted Growth* to push data-driven growth % into Scenario Lab.
+**Integration:** Click *Apply Forecasted Growth* to push data-driven growth % into What-If Analysis.
         """)
 
     daily_df = get_daily_attendance_df()
@@ -128,6 +133,12 @@ def render(sidebar_state):
                 f"Units: {daily_df['unit_name'].nunique()} | "
                 f"Records: {len(daily_df):,}"
             )
+            with st.expander("Preview loaded data", expanded=False):
+                preview = daily_df[["date", "unit_name", "in_office_count"]].head(8).copy()
+                preview.columns = ["Date", "Unit Name", "In-Office Count"]
+                preview["Date"] = preview["Date"].dt.strftime("%Y-%m-%d")
+                st.dataframe(preview, use_container_width=True, hide_index=True)
+                st.caption("First 8 rows shown. CSV must have exactly these 3 columns.")
 
     # Guard: need daily data for everything below
     if daily_df is None:
@@ -198,8 +209,8 @@ def render(sidebar_state):
    future attendance will fall within this band, assuming the trend continues.
 
 5. **Suggested Growth %** — the trend slope annualized relative to the current median:
-   `(slope / current_median) × 365`. This can be applied directly to the Scenario Lab
-   growth forecast to replace manual estimates with data-driven projections.
+   `(slope / current_median) × 365`. This can be applied directly to the What-If Analysis
+   unit overrides to replace manual estimates with data-driven projections.
 
 **Limitations:** Linear trend assumes constant growth rate. Seasonal patterns (e.g., holiday dips)
 or structural changes (e.g., new RTO policy) may cause the actual trajectory to deviate.
@@ -248,7 +259,7 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
                     st.success(
                         f"Applied forecasted growth to {len(summaries)} units "
                         f"in scenario '{scenario.name}'. "
-                        f"Re-run simulation in Scenario Lab to see updated demand."
+                        f"Re-run Policy Simulation in What-If Analysis to see updated demand."
                     )
                 elif scenario and scenario.is_locked:
                     st.warning("Active scenario is locked. Unlock it first.")
@@ -259,8 +270,10 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
     st.divider()
     st.subheader("Probabilistic Seat Demand")
     st.caption(
-        "Instead of allocating for peak attendance, compute the seats needed at a given "
-        "confidence level. Lower confidence = fewer seats but more risk of exceeding capacity."
+        "How many seats does your **attendance history** suggest at a given confidence level? "
+        "This is a *descriptive* view — no growth, RTO policy, or floor constraints applied. "
+        "Compare against your **scenario allocation** (prescriptive: includes policy, RTO factor, "
+        "growth assumptions, and floor constraints) to spot over- or under-allocation."
     )
 
     confidence = st.select_slider(
@@ -291,20 +304,147 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
         pc3.metric("Potential Savings", f"{total_savings:,} seats",
                    delta=f"-{total_savings}", delta_color="inverse")
 
-        # Detail table with bootstrap CI
+        # Fetch current allocation from active scenario (if available)
+        alloc_map = {}
+        if is_data_loaded():
+            _scen = get_active_scenario()
+            if _scen and _scen.allocation_results:
+                alloc_map = {a.unit_name: a.allocated_seats for a in _scen.allocation_results}
+
+        # Detail table with bootstrap CI + scenario allocation comparison
         detail_rows = []
         for d in demand_data:
             bs = bootstrap_confidence_interval(daily_df, d["unit_name"], confidence)
+            current_alloc = alloc_map.get(d["unit_name"])
+            pct_val = d["percentiles"][confidence]
             detail_rows.append({
                 "Unit": d["unit_name"],
                 "Median": d["median"],
                 "Peak": d["peak"],
-                f"{confidence:.0%} Percentile": d["percentiles"][confidence],
+                f"{confidence:.0%} Percentile": pct_val,
+                "Current Allocation": current_alloc if current_alloc is not None else "—",
+                "vs Allocation": (
+                    f"{current_alloc - pct_val:+,}" if current_alloc is not None else "—"
+                ),
                 "Savings vs Peak": d["savings_vs_peak"][confidence],
                 "Bootstrap CI": f"[{bs['ci_lower']}, {bs['ci_upper']}]" if bs else "N/A",
                 "Observations": d["n_observations"],
             })
         st.dataframe(pd.DataFrame(detail_rows), use_container_width=True, hide_index=True)
+        if alloc_map:
+            st.caption(
+                "**vs Allocation**: positive = scenario assigns more seats than percentile demand "
+                "(possible right-sizing opportunity) · "
+                "negative = scenario assigns fewer seats (potential overflow risk)"
+            )
+
+    # ── Section 4b: Short-Term Demand Forecast ─────────────────────────────
+    st.divider()
+    st.subheader("Short-Term Demand Forecast")
+    st.caption(
+        "Tactical seat demand forecast for the next 5–21 business days. "
+        "Uses day-of-week patterns from your historical data with a trend-slope recency adjustment. "
+        "Holidays configured in Admin are automatically excluded."
+    )
+
+    # Horizon selector + per-unit toggle
+    stf_col1, stf_col2 = st.columns([3, 1])
+    with stf_col1:
+        stf_horizon = st.radio(
+            "Forecast Horizon",
+            options=FORECAST_SHORT_TERM_DAYS_OPTIONS,
+            format_func=lambda x: f"{x} days (~{x // 5} wk{'s' if x // 5 != 1 else ''})",
+            horizontal=True,
+            index=0,
+            key="stf_horizon_radio",
+        )
+    with stf_col2:
+        stf_per_unit = st.toggle("Per-unit breakdown", value=False, key="stf_per_unit_toggle")
+
+    # Get holiday dates and total capacity
+    rule_config_stf = get_rule_config()
+    holiday_dates_stf = rule_config_stf.get("holiday_dates", [])
+    total_cap_stf = 0
+    if is_data_loaded():
+        floors_stf = get_floors()
+        if floors_stf:
+            total_cap_stf = sum(f.total_seats for f in floors_stf)
+
+    stf_results = compute_week_ahead_forecast(
+        daily_df, total_capacity=total_cap_stf,
+        n_days=stf_horizon, holiday_dates=holiday_dates_stf,
+    )
+
+    if stf_results:
+        import plotly.graph_objects as go
+
+        alert_days = [r for r in stf_results if r["capacity_pct"] > FORECAST_CAPACITY_ALERT_THRESHOLD]
+        peak_seats = max(r["expected_seats"] for r in stf_results)
+
+        stf_m1, stf_m2, stf_m3 = st.columns(3)
+        stf_m1.metric("Forecast Days", stf_horizon)
+        stf_m2.metric("Capacity Risk Days (>90%)", len(alert_days))
+        stf_m3.metric("Peak Forecast", f"{peak_seats:,} seats")
+
+        if alert_days:
+            worst = max(alert_days, key=lambda r: r["capacity_pct"])
+            st.error(
+                f"**{len(alert_days)} day{'s' if len(alert_days) != 1 else ''} above 90% capacity** · "
+                f"Highest: **{worst['weekday_name']}** at {worst['capacity_pct']:.0%} utilization"
+            )
+
+        bar_colors = [
+            "#EF4444" if r["capacity_pct"] > FORECAST_CAPACITY_ALERT_THRESHOLD
+            else ("#F59E0B" if r["capacity_pct"] > 0.65 else "#10B981")
+            for r in stf_results
+        ]
+        text_labels = [
+            f"{r['capacity_pct']:.0%}" if total_cap_stf > 0 else f"{r['expected_seats']:,}"
+            for r in stf_results
+        ]
+
+        fig_stf = go.Figure(go.Bar(
+            x=[r["short_label"] for r in stf_results],
+            y=[r["expected_seats"] for r in stf_results],
+            marker_color=bar_colors,
+            text=text_labels,
+            textposition="outside",
+        ))
+        if total_cap_stf > 0:
+            fig_stf.add_hline(
+                y=total_cap_stf * FORECAST_CAPACITY_ALERT_THRESHOLD,
+                line_dash="dot", line_color="#EF4444",
+                annotation_text="90% capacity threshold",
+            )
+        fig_stf.update_layout(
+            title=f"Company-Wide Seat Demand — Next {stf_horizon} Business Days",
+            yaxis_title="Expected Seats",
+            showlegend=False,
+            height=360,
+            margin=dict(t=50, b=20),
+        )
+        st.plotly_chart(fig_stf, use_container_width=True, key="stf_company_bar")
+
+        if holiday_dates_stf:
+            st.caption(f"Holidays excluded: {', '.join(str(h) for h in holiday_dates_stf)}")
+
+        # Per-unit breakdown
+        if stf_per_unit:
+            unit_fcast = compute_per_unit_forecast(
+                daily_df, n_days=stf_horizon, holiday_dates=holiday_dates_stf,
+            )
+            if unit_fcast:
+                df_uf = pd.DataFrame(unit_fcast)
+                pivot_uf = df_uf.pivot_table(
+                    index="unit_name", columns="short_label",
+                    values="expected_seats", aggfunc="first",
+                )
+                pivot_uf.index.name = "Unit"
+                pivot_uf.columns.name = None
+                st.dataframe(pivot_uf, use_container_width=True)
+                st.caption("Expected in-office headcount per unit per business day.")
+    else:
+        st.info("Need at least 7 days of attendance data to generate a short-term forecast.")
 
     # ── Section 5: Day-of-Week Patterns ────────────────────────────────────
     st.divider()
@@ -319,30 +459,97 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
             "(e.g., Tue/Wed) and low-attendance days suitable for hot-desking policies."
         )
 
+    # ── Section 5b: RTO Load Balancing Advisory ────────────────────────────
+    with st.expander("RTO Load Balancing Advisory", expanded=False):
+        st.markdown(
+            "Identifies departments whose peak days cluster on the same weekday, "
+            "creating avoidable load spikes. Advisory suggestions help managers negotiate "
+            "voluntary RTO day shifts to flatten the weekly demand curve."
+        )
+        conflict = compute_dow_conflict_analysis(daily_df)
+
+        if conflict["day_loads"]:
+            import plotly.graph_objects as go
+
+            day_order_dow = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+            loads = [conflict["day_loads"].get(d, 0) for d in day_order_dow]
+            overloaded = conflict["overloaded_days"]
+            bar_colors_dow = [
+                "#EF4444" if d in overloaded else "#4A90D9"
+                for d in day_order_dow
+            ]
+
+            fig_dow_load = go.Figure(go.Bar(
+                x=day_order_dow,
+                y=loads,
+                marker_color=bar_colors_dow,
+                text=[f"{v:,}" for v in loads],
+                textposition="outside",
+            ))
+            fig_dow_load.update_layout(
+                title="Company-Wide Daily Load (Sum of All Unit Medians)",
+                yaxis_title="Total Expected Seats",
+                showlegend=False,
+                height=300,
+                margin=dict(t=40, b=20),
+            )
+            st.plotly_chart(fig_dow_load, use_container_width=True, key="dow_load_bar")
+
+            if overloaded:
+                st.warning(
+                    f"**Overloaded days: {', '.join(overloaded)}** — "
+                    f"these days carry more than {int((1.15 - 1) * 100)}% above average load."
+                )
+            else:
+                st.success("Load is well-balanced across the week — no overloaded days detected.")
+
+            # Peak Day per Unit table
+            peak_data_tab = compute_peak_day_per_unit(daily_df)
+            if peak_data_tab:
+                st.markdown("**Peak Day per Unit**")
+                peak_rows = [{
+                    "Unit": p["unit_name"],
+                    "Peak Day": p["peak_day_name"],
+                    "Peak Median": p["peak_day_median"],
+                    "Avg Median": p["overall_median"],
+                    "Peak Ratio": f"{p['peak_ratio']:.2f}×",
+                    "Overloaded Day?": "⚠️ Yes" if p["peak_day_name"] in overloaded else "✅ No",
+                } for p in peak_data_tab]
+                st.dataframe(pd.DataFrame(peak_rows), use_container_width=True, hide_index=True)
+
+            # Stagger suggestions
+            suggestions = conflict["suggestions"]
+            if suggestions:
+                st.markdown("**Stagger Suggestions**")
+                sug_rows = [{
+                    "Unit": s["unit_name"],
+                    "Current Peak Day": s["current_peak_day"],
+                    "Suggested Shift To": s["suggested_day"],
+                    "Est. Load Moved Off Peak Day": s["load_reduction"],
+                } for s in suggestions]
+                st.dataframe(pd.DataFrame(sug_rows), use_container_width=True, hide_index=True)
+                st.info(
+                    "These suggestions are **advisory only** — share with unit managers to "
+                    "negotiate voluntary RTO day shifts. No changes are applied automatically."
+                )
+            elif overloaded:
+                st.info("No specific shift suggestions could be generated for overloaded days.")
+        else:
+            st.info("Need daily attendance data across multiple units to run conflict analysis.")
+
     # ── Section 6: Advanced Insights ──────────────────────────────────────
     st.divider()
     st.subheader("Advanced Insights")
 
-    adv_tab1, adv_tab2, adv_tab3 = st.tabs([
-        "📊 Demand Correlation", "⚠️ Capacity Breach Risk", "🔗 Temporal Clusters",
+    adv_tab1, adv_tab2 = st.tabs([
+        "⚠️ Capacity Breach Risk", "🔗 Temporal Clusters",
     ])
 
     with adv_tab1:
         st.caption(
-            "ℹ️ **Analyst view:** Pearson correlation of daily attendance between units. "
-            "High positive = units peak together (compete for seats on the same days). "
-            "Negative = complementary patterns, opportunity for desk sharing. "
-            "Not required for scenario planning — useful for desk-sharing policy design."
-        )
-        corr_df = compute_demand_correlation(daily_df, unit_names)
-        if not corr_df.empty:
-            fig = correlation_heatmap_chart(corr_df)
-            st.plotly_chart(fig, use_container_width=True, key="forecast_corr_heatmap")
-
-    with adv_tab2:
-        st.caption(
-            "Probability that daily attendance exceeds currently allocated seats. "
-            "Requires a simulation to have been run first."
+            "How often does actual attendance exceed your allocated seats? "
+            "Based on your historical daily data — no guesswork, just your own numbers. "
+            "Requires a Policy Simulation to have been run first."
         )
         if is_data_loaded():
             scenario = get_active_scenario()
@@ -361,32 +568,200 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
                             breach_data.append(result)
 
                 if breach_data:
-                    breach_df = pd.DataFrame(breach_data)
-                    breach_df.columns = [
-                        "Unit", "Allocated Seats", "Breach Probability",
-                        "Est. Breach Days/Month", "Avg Breach Magnitude",
-                    ]
-                    breach_df["Breach Probability"] = breach_df["Breach Probability"].apply(
-                        lambda x: f"{x:.1%}"
+                    import math
+
+                    def _risk_tier(prob):
+                        if prob >= 0.20:
+                            return "🔴 High"
+                        if prob >= 0.10:
+                            return "🟡 Medium"
+                        return "🟢 Low"
+
+                    def _seats_to_fix(magnitude):
+                        return int(math.ceil(magnitude / 5) * 5) if magnitude > 0 else 0
+
+                    # Summary callouts
+                    high_risk = [d for d in breach_data if d["breach_probability"] >= 0.20]
+                    most_critical = max(breach_data, key=lambda d: d["expected_breach_days_per_month"])
+                    if high_risk:
+                        st.warning(
+                            f"**{len(high_risk)} unit{'s' if len(high_risk) != 1 else ''} at high overflow risk** · "
+                            f"Most critical: **{most_critical['unit_name']}** — "
+                            f"~{most_critical['expected_breach_days_per_month']:.0f} overflow days/month"
+                        )
+                    else:
+                        st.success(
+                            f"No units at high overflow risk · Most at-risk: **{most_critical['unit_name']}** — "
+                            f"~{most_critical['expected_breach_days_per_month']:.0f} overflow days/month"
+                        )
+
+                    # Redesigned table
+                    rows = []
+                    for d in breach_data:
+                        prob = d["breach_probability"]
+                        mag = d["avg_breach_magnitude"]
+                        rows.append({
+                            "Risk": _risk_tier(prob),
+                            "Unit": d["unit_name"],
+                            "Seats Allocated": d["allocated_seats"],
+                            "% Days Overflow": f"{prob:.0%} of days",
+                            "Overflow Days/Month": f"~{d['expected_breach_days_per_month']:.0f} days",
+                            "Extra People Needed": f"+{mag:.0f} people" if mag > 0 else "none",
+                            "Seats to Add (Fix)": f"+{_seats_to_fix(mag)}" if mag > 0 else "—",
+                        })
+                    # Sort by risk: high first
+                    risk_order = {"🔴 High": 0, "🟡 Medium": 1, "🟢 Low": 2}
+                    rows.sort(key=lambda r: risk_order.get(r["Risk"], 9))
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                    st.caption(
+                        "**Risk:** 🔴 High = overflows 1 in 5 days or more · "
+                        "🟡 Medium = 1 in 10 days · 🟢 Low = rare  |  "
+                        "**Seats to Add** = average overflow gap rounded to nearest 5 — "
+                        "adding this many seats would eliminate most overflow days."
                     )
-                    st.dataframe(breach_df, use_container_width=True, hide_index=True)
                 else:
                     st.info("No breach data available for units in daily attendance data.")
             else:
-                st.info("Run a simulation in Scenario Lab first to see breach risk.")
+                st.info("Run a Policy Simulation in the What-If Analysis tab first to see breach risk.")
         else:
             st.info("Load base data in Admin tab first.")
 
-    with adv_tab3:
-        st.caption(
-            "Units grouped by similar temporal attendance patterns (correlation > 0.7). "
-            "Same-cluster units have correlated daily attendance and may benefit "
-            "from shared floor assignment or coordinated hot-desking."
+    with adv_tab2:
+        st.markdown(
+            "Units are grouped by how similarly their in-office attendance moves week-over-week. "
+            "Two units in the same group have a correlation ≥ 0.7 — meaning when one peaks, the other "
+            "does too. Units in different groups have largely independent or opposite patterns."
         )
         clusters = compute_temporal_clustering(daily_df, unit_names)
         if clusters:
-            cluster_df = pd.DataFrame(clusters)
-            cluster_df.columns = ["Unit", "Cluster ID", "Cluster", "Cluster Size"]
-            st.dataframe(cluster_df, use_container_width=True, hide_index=True)
+            _PALETTE = ["#4A90D9", "#E8734A", "#2ECC71", "#9B59B6", "#F39C12", "#1ABC9C"]
+
+            # Persist cluster map for use by the planning engine
+            cluster_map = {r["unit_name"]: r["cluster_id"] for r in clusters}
+            st.session_state["unit_cluster_map"] = cluster_map
+
+            # Build group → members map
+            cluster_groups: dict = {}
+            for row in clusters:
+                cluster_groups.setdefault(row["cluster_label"], []).append(row["unit_name"])
+
+            # ── Cluster Cards ─────────────────────────────────────────
+            st.markdown("**Unit Groupings**")
+            card_cols = st.columns(max(1, len(cluster_groups)))
+            for col, group_label in zip(card_cols, sorted(cluster_groups.keys())):
+                members = cluster_groups[group_label]
+                idx = int(group_label.split()[-1]) - 1
+                color = _PALETTE[idx % len(_PALETTE)]
+                with col:
+                    st.markdown(
+                        f"<div style='border-left:4px solid {color};padding:8px 12px;"
+                        f"background:#f8f9fa;border-radius:4px;margin-bottom:4px'>"
+                        f"<b style='color:{color}'>{group_label}</b>&nbsp;"
+                        f"<small>({len(members)} unit{'s' if len(members) != 1 else ''})</small>"
+                        f"<br><br>"
+                        + "".join(f"<div>• {m}</div>" for m in members)
+                        + "</div>",
+                        unsafe_allow_html=True,
+                    )
+
+            # ── Planning implication callout ───────────────────────────
+            st.info(
+                "**Planning implication:** Units in the same group should ideally NOT be placed on the same floor. "
+                "They peak simultaneously, so a floor shared only by same-group units will be over-capacity on peak days. "
+                "Cross-group co-location (e.g., Group 1 + Group 2 on the same floor) means their peaks offset each other "
+                "— steadier floor utilization and lower saturation risk. "
+                "Enable **Cluster-Diverse Floor Placement** in What-If Analysis to apply this automatically."
+            )
+
+            # ── DOW Profile Chart ──────────────────────────────────────
+            st.markdown("**Why are they grouped? — Attendance Profile by Day**")
+            dow_df_clust = compute_dow_patterns(daily_df)
+            if not dow_df_clust.empty:
+                fig_clust = temporal_cluster_dow_chart(clusters, dow_df_clust)
+                st.plotly_chart(fig_clust, use_container_width=True, key="temporal_cluster_dow")
+
+            st.caption(
+                "Groups with different peak days (e.g., Group 1 peaks Tue, Group 2 peaks Thu) "
+                "can safely share desks — their demand doesn't overlap."
+            )
+
+            # ── Cluster Placement Advisory ─────────────────────────────
+            if is_data_loaded():
+                adv_scenario = get_active_scenario()
+                if adv_scenario and adv_scenario.floor_assignments:
+                    with st.expander("Cluster Placement Advisory — Current Floor Assignments", expanded=False):
+                        from collections import defaultdict
+
+                        def _build_advisory_rows(floor_assignments, cmap):
+                            fu: dict = defaultdict(list)
+                            for fa in floor_assignments:
+                                fu[f"{fa.tower_id} F{fa.floor_number}"].append(fa.unit_name)
+                            rows = []
+                            for label, members in sorted(fu.items()):
+                                cids = {cmap.get(u) for u in members if cmap.get(u) is not None}
+                                n = len(cids)
+                                risk = "⚠️ Concentrated" if n <= 1 else "✅ Diversified"
+                                rows.append({
+                                    "Floor": label,
+                                    "Units": ", ".join(members),
+                                    "Distinct Groups": n,
+                                    "Peak Risk": risk,
+                                })
+                            return rows
+
+                        advisory_rows = _build_advisory_rows(adv_scenario.floor_assignments, cluster_map)
+                        n_concentrated = sum(1 for r in advisory_rows if r["Peak Risk"].startswith("⚠️"))
+                        n_total = len(advisory_rows)
+
+                        # Summary + action button
+                        if n_concentrated > 0:
+                            st.warning(
+                                f"**{n_concentrated} of {n_total} floors** have all units from the same "
+                                f"attendance group — they will all peak on the same days."
+                            )
+                        else:
+                            st.success(f"All {n_total} floors are diversified across attendance groups.")
+
+                        if n_concentrated > 0 and adv_scenario.allocation_results:
+                            if st.button(
+                                "Apply Cluster-Diverse Placement (Re-assign Floors)",
+                                type="primary",
+                                key="btn_apply_cluster_placement",
+                                help=(
+                                    "Re-assigns floor seats using your current seat demand — "
+                                    "no changes to allocation amounts. "
+                                    "Prefers placing different attendance groups on the same floor."
+                                ),
+                            ):
+                                from engine.spatial import assign_units_to_floors as _assign_floors
+                                _excluded = list(adv_scenario.params.excluded_floors or [])
+                                _floors = get_floors()
+                                _new_assignments, _ = _assign_floors(
+                                    adv_scenario.allocation_results,
+                                    _floors,
+                                    _excluded,
+                                    cluster_map=cluster_map,
+                                    diversity_weight=800,
+                                )
+                                adv_scenario.floor_assignments = _new_assignments
+                                update_scenario(adv_scenario)
+                                add_audit_entry(
+                                    "cluster_placement", adv_scenario.scenario_id,
+                                    "floor_assignments", "original", "cluster_diverse",
+                                    rationale="Applied cluster-diverse floor placement from Demand Analytics",
+                                )
+                                st.success("Floor assignments updated. Refreshing advisory...")
+                                st.rerun()
+
+                        # Advisory table
+                        st.dataframe(
+                            pd.DataFrame(advisory_rows),
+                            use_container_width=True, hide_index=True,
+                        )
+                        st.caption(
+                            "⚠️ Concentrated = all units on this floor share the same attendance group "
+                            "— they'll all peak on the same days, raising saturation risk. "
+                            "✅ Diversified = multiple groups present, peaks are spread."
+                        )
         else:
             st.info("Need at least 2 units with daily data to compute clusters.")

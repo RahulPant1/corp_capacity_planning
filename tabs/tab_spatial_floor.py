@@ -20,7 +20,7 @@ def render(sidebar_state):
 
     scenario = get_active_scenario()
     if not scenario or not scenario.floor_assignments:
-        st.info("No floor assignments available. Run a simulation from the Scenario Lab.")
+        st.info("No floor assignments available. Run a Policy Simulation from the What-If Analysis tab.")
         return
 
     floors = get_floors()

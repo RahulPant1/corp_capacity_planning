@@ -81,8 +81,15 @@ def assign_units_to_floors(
     allocations: List[AllocationRecommendation],
     floors: List[Floor],
     excluded_floor_ids: List[str] = None,
+    cluster_map: Dict[str, int] = None,
+    diversity_weight: float = 800,
 ) -> Tuple[List[FloorAssignment], Dict[str, float]]:
-    """Assign allocated seats to physical floors. Returns assignments and fragmentation scores."""
+    """Assign allocated seats to physical floors. Returns assignments and fragmentation scores.
+
+    cluster_map: optional {unit_name: cluster_id} — when provided, the scorer applies a
+    diversity bonus for placing units from different clusters on the same floor, and a
+    same-cluster penalty when concentrating correlated-peak units together.
+    """
     excluded = set(excluded_floor_ids or [])
     assignments: List[FloorAssignment] = []
     floor_remaining: Dict[str, int] = {}
@@ -99,6 +106,7 @@ def assign_units_to_floors(
     for alloc in sorted_allocs:
         seats_to_place = alloc.allocated_seats
         unit_name = alloc.unit_name
+        unit_cid = cluster_map.get(unit_name) if cluster_map else None
 
         while seats_to_place > 0:
             # Find best floor
@@ -114,6 +122,21 @@ def assign_units_to_floors(
                     continue
                 f = floor_map[fid]
                 s = score_floor_for_unit(f, remaining, assignments, unit_name, floors_used)
+
+                # Cluster diversity adjustment: bonus for cross-cluster, penalty for same-cluster
+                if cluster_map and unit_cid is not None:
+                    clusters_on_floor = {
+                        cluster_map.get(a.unit_name)
+                        for a in assignments
+                        if a.tower_id == f.tower_id and a.floor_number == f.floor_number
+                        and cluster_map.get(a.unit_name) is not None
+                    }
+                    if clusters_on_floor:
+                        if unit_cid not in clusters_on_floor:
+                            s += diversity_weight        # cross-cluster placement → bonus
+                        else:
+                            s -= diversity_weight / 2   # same-cluster concentration → penalty
+
                 if s > best_score:
                     best_score = s
                     best_floor_id = fid

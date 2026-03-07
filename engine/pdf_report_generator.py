@@ -655,51 +655,6 @@ def generate_pdf_report(scenario, floors, units, attendance_map,
             story.append(_std_table(ba_header, ba_data,
                                     ["40%", "20%", "20%", "20%"]))
 
-    # ── PAGE: CO-LOCATION SUGGESTIONS ──────────────────────────────────────────
-    try:
-        from engine.colocation import (
-            compute_colocation_scores, get_current_colocations,
-            flag_colocation_mismatches,
-        )
-
-        coloc_scores = compute_colocation_scores(units, attendance_map)
-        if coloc_scores:
-            story.append(PageBreak())
-            story.append(_header_table("CPG Seat Planning Report",
-                                       scenario.name, report_date, styles))
-            story.extend(_section_header("Co-location Suggestions", styles))
-            story.append(Paragraph(
-                "Units ranked by co-location affinity (higher score = better floor-sharing fit). "
-                "Based on similarity in team size, growth rate, shift pattern, RTO frequency, "
-                "and priority.",
-                caption))
-            story.append(Spacer(1, 0.2 * cm))
-
-            coloc_header = ["Unit A", "Unit B", "Score", "Reasoning"]
-            coloc_data = []
-            for s in coloc_scores[:10]:
-                coloc_data.append([
-                    s["unit_a"], s["unit_b"],
-                    f"{s['score']:.0%}", s["reasoning"],
-                ])
-            story.append(_std_table(coloc_header, coloc_data,
-                                    ["18%", "18%", "10%", "54%"]))
-
-            if assignments:
-                current_colocs = get_current_colocations(assignments)
-                mismatches = flag_colocation_mismatches(current_colocs, coloc_scores)
-                if mismatches:
-                    story.append(Spacer(1, 0.3 * cm))
-                    story.extend(_section_header("Co-location Mismatches", styles))
-                    mm_header = ["Floor", "Unit A", "Unit B", "Score", "Issue"]
-                    mm_data = [[m["floor_id"], m["unit_a"], m["unit_b"],
-                                f"{m['score']:.0%}", m["flag_reason"]]
-                               for m in mismatches]
-                    story.append(_std_table(mm_header, mm_data,
-                                           ["14%", "16%", "16%", "10%", "44%"]))
-    except Exception:
-        pass  # Graceful degradation
-
     # ── PAGE: ATTENDANCE ANOMALIES ───────────────────────────────────────────
     try:
         from engine.anomaly import detect_attendance_anomalies

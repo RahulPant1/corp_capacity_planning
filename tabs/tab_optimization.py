@@ -776,60 +776,6 @@ Adjust parameters → click **Simulate & Optimize** → review impact metrics + 
 
     st.divider()
 
-    # =========================================================================
-    # SECTION 10: AI Insights
-    # =========================================================================
-    with st.expander("Co-location Insights", expanded=True):
-        st.caption(
-            "Which units are best suited to share a floor? "
-            "Scored on team size, growth rate, shift patterns, RTO frequency, and business priority."
-        )
-        from engine.colocation import (
-            compute_colocation_scores, get_current_colocations, flag_colocation_mismatches,
-        )
-        from components.charts import colocation_heatmap
-
-        att_profiles_coloc = get_attendance()
-        att_map_coloc = {a.unit_name: a for a in att_profiles_coloc}
-
-        if len(units) < 2:
-            st.info("Need at least 2 units to compute co-location scores.")
-        else:
-            coloc_scores = compute_colocation_scores(units, att_map_coloc)
-            if coloc_scores:
-                fig_coloc = colocation_heatmap(coloc_scores)
-                st.plotly_chart(fig_coloc, use_container_width=True, key="whatif_coloc_heatmap")
-
-                st.markdown("**Top Co-location Pairs:**")
-                pair_rows = [
-                    {
-                        "Unit A": s["unit_a"], "Unit B": s["unit_b"],
-                        "Score": f"{s['score']:.0%}", "Reasoning": s["reasoning"],
-                    }
-                    for s in coloc_scores[:10]
-                ]
-                st.dataframe(pd.DataFrame(pair_rows), use_container_width=True, hide_index=True)
-
-            current_coloc = get_current_colocations(scenario.floor_assignments)
-            if current_coloc:
-                st.markdown("**Currently Co-located Units:**")
-                for c in current_coloc:
-                    st.markdown(
-                        f"- **{c['floor_id']}**: {', '.join(c['units'])} ({c['unit_count']} units)"
-                    )
-
-                if coloc_scores:
-                    mismatches = flag_colocation_mismatches(current_coloc, coloc_scores)
-                    if mismatches:
-                        st.markdown("**Mismatch Alerts:**")
-                        for m in mismatches:
-                            st.warning(
-                                f"**{m['floor_id']}**: {m['unit_a']} + {m['unit_b']} "
-                                f"(affinity {m['score']:.0%}) — {m['flag_reason']}"
-                            )
-
-    st.divider()
-
     with st.expander("Attendance Anomalies", expanded=True):
         st.caption(
             "Flags units with statistically unusual attendance patterns using z-scores. "

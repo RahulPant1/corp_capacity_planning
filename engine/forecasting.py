@@ -241,6 +241,63 @@ def compute_forecast_summary(
     return summaries
 
 
+# ── Week-Ahead Operational Forecast ──────────────────────────────────────
+
+def compute_week_ahead_forecast(
+    df: pd.DataFrame,
+    total_capacity: int = 0,
+) -> List[dict]:
+    """Next 5 working-day attendance forecast using DOW patterns + overall trend.
+
+    Uses historical day-of-week medians (summed across all units) and applies
+    the overall trend slope as a recency adjustment.
+
+    Returns list of dicts (Mon→Fri next week), one per working day:
+        date, weekday_name, short_label, expected_seats, capacity_pct, status
+    Returns [] if insufficient data (< 7 weekday records).
+    """
+    from datetime import datetime, timedelta
+
+    dow_df = compute_dow_patterns(df)  # all units, all weekdays
+    if dow_df.empty:
+        return []
+
+    overall = compute_overall_trend(df)
+    slope = overall.get("trend_slope", 0.0) if overall else 0.0
+
+    # Sum medians across all units per weekday
+    dow_totals = (
+        dow_df.groupby("day_of_week")["median_count"]
+        .sum()
+        .to_dict()
+    )
+
+    # Find next 5 working days (Mon=0 … Fri=4)
+    today = datetime.now().date()
+    upcoming: List = []
+    d = today + timedelta(days=1)
+    while len(upcoming) < 5:
+        if d.weekday() < 5:
+            upcoming.append(d)
+        d += timedelta(days=1)
+
+    results = []
+    for i, day in enumerate(upcoming):
+        base = dow_totals.get(day.weekday(), 0)
+        expected = max(0, round(base + slope * (i + 1)))
+        cap_pct = expected / total_capacity if total_capacity > 0 else 0.0
+        status = "HIGH" if cap_pct > 0.85 else ("MEDIUM" if cap_pct > 0.65 else "LOW")
+        results.append({
+            "date": day,
+            "weekday_name": day.strftime("%A"),
+            "short_label": day.strftime("%a\n%b %d"),
+            "expected_seats": expected,
+            "capacity_pct": cap_pct,
+            "status": status,
+        })
+    return results
+
+
 # ── Demand Correlation ────────────────────────────────────────────────────
 
 def compute_demand_correlation(

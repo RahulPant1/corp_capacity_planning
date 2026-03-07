@@ -191,7 +191,6 @@ Physical seat utilization across towers and floors. Two view modes via toggle:
 Both views share:
 - Floor detail table showing **Largest Unit (N seats)** per floor
 - Building spread analysis and consolidation suggestions for fragmented units
-- **Co-location Recommendations** *(expander)* — AI feature that scores every unit pair for floor-sharing compatibility (see [AI Features](#ai-features))
 
 ### Tab 4: Scenario Lab
 
@@ -279,7 +278,6 @@ Irrelevant sliders are **greyed out** based on the selected mode with a contextu
 - **Adopt** any ranked scenario via dropdown → applies params + floor assignments to active scenario
 
 **AI Insights** *(expanders)*:
-- Co-location Insights — affinity heatmap, top pairs, mismatch alerts (see AI Features)
 - Attendance Anomalies — z-score anomaly detection (see AI Features)
 
 **Placement preference (all objectives):**
@@ -364,42 +362,11 @@ Adjustable in **Admin > Rule Configuration**.
 
 ## AI Features
 
-Six analytical AI features are built into the platform — no external API or internet connection required. All computation runs locally using numpy, pandas, and scipy.
+Five analytical AI features are built into the platform — no external API or internet connection required. All computation runs locally using numpy, pandas, and scipy.
 
 ---
 
-### 1. Smart Unit Co-location Scoring *(Spatial / Floor View tab)*
-
-**What it does:** Ranks every unit pair by how compatible they are for sharing a floor, based on 5 planning dimensions. Helps real estate teams make deliberate co-location decisions rather than arbitrary placements.
-
-**How it works:**
-1. Build a feature vector per unit: team size (HC), growth rate, night shift %, RTO days/week, business priority
-2. Min-max normalize each dimension to [0, 1] across all units — so a 400-person team and an 80-person team are comparable
-3. For each unit pair: compute per-dimension similarity as `1 − |normalized_diff|`
-4. Weighted sum gives the final affinity score (0–1, higher = better match)
-5. Reasoning only references **discriminating dimensions** — those with actual variance across units. If all units have 0% night shift, shift is not cited in the explanation since it distinguishes nothing.
-
-**Default dimension weights:**
-
-| Dimension | Weight | Why |
-|-----------|--------|-----|
-| Team Size | 20% | Similar-sized teams fit more cleanly onto the same floors |
-| Growth Rate | 20% | Matching growth trajectories reduces future re-shuffling |
-| Shift Pattern | 20% | Units with shared shift profiles have less desk contention |
-| RTO Frequency | 25% | Peak in-office days drive desk demand — mismatched RTO creates crowding |
-| Business Priority | 15% | Co-locating same-priority units simplifies scarcity trade-offs |
-
-**What you see:**
-- Co-location affinity heatmap (all unit pairs)
-- Top 10 recommended pairs with score and reasoning (e.g. *"Well-matched on RTO frequency (3.0 vs 2.8 RTO days/wk); notable gap on team size (400 vs 80 HC)"*)
-- Currently co-located units per floor
-- **Mismatch alerts** — units already sharing a floor but with low affinity score (<35%)
-
-**PDF report:** Co-location Suggestions page with top pair table and mismatch flags.
-
----
-
-### 2. What-If Sensitivity Analysis *(Scenario Lab tab)*
+### 1. What-If Sensitivity Analysis *(Scenario Lab tab)*
 
 **What it does:** Automatically identifies which planning levers have the biggest impact on your seat supply–demand gap. Answers: *"Should I focus on adjusting allocation %, the planning horizon, or the RTO mandate?"*
 
@@ -492,7 +459,7 @@ Six analytical AI features are built into the platform — no external API or in
 
 ### 6. Temporal Demand Clustering *(Demand Forecasting tab — Advanced Insights)*
 
-**What it does:** Groups business units by similar temporal attendance patterns to identify hot-desking and shared floor-assignment opportunities — complementing the static co-location scoring which uses HR attributes.
+**What it does:** Groups business units by similar temporal attendance patterns to identify hot-desking and shared floor-assignment opportunities — complementing attendance-pattern analysis with temporal grouping.
 
 **How it works:**
 1. Pivot daily attendance into a unit × date matrix
@@ -507,14 +474,6 @@ Six analytical AI features are built into the platform — no external API or in
 All AI feature parameters are in `config/defaults.py`:
 
 ```python
-# Co-location scoring weights (must sum to 1.0)
-COLOCATION_WEIGHT_SIZE = 0.20
-COLOCATION_WEIGHT_GROWTH = 0.20
-COLOCATION_WEIGHT_SHIFT = 0.20
-COLOCATION_WEIGHT_RTO = 0.25
-COLOCATION_WEIGHT_PRIORITY = 0.15
-COLOCATION_TOP_PAIRS = 10           # Max pairs shown in UI and PDF
-
 # Sensitivity analysis parameter ranges
 SENSITIVITY_ALLOC_VARIATIONS = [-0.10, -0.05, 0.05, 0.10]
 SENSITIVITY_HORIZON_VARIATIONS = [-6, -3, 3, 6]
@@ -557,7 +516,6 @@ cpg_planning_tool/
 │   ├── scenario_engine.py       # Scenario cloning, override application, simulation pipeline
 │   ├── spatial.py               # Floor scoring, adjacency, fragmentation
 │   ├── explainer.py             # Human-readable allocation explanation steps
-│   ├── colocation.py            # AI: pairwise unit co-location affinity scoring
 │   ├── sensitivity.py           # AI: one-at-a-time parameter sensitivity analysis
 │   ├── anomaly.py               # AI: z-score attendance anomaly detection
 │   ├── forecasting.py           # AI: demand forecasting (trend, EMA, bootstrap CI, clustering)

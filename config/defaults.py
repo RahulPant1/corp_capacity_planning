@@ -77,13 +77,6 @@ PLANNING_BUFFER_PRESETS = {
 }
 DEFAULT_PLANNING_BUFFER = "balanced"
 
-# ── Co-location scoring weights ─────────────────────────────────────────────
-COLOCATION_WEIGHT_SIZE = 0.20
-COLOCATION_WEIGHT_GROWTH = 0.20
-COLOCATION_WEIGHT_SHIFT = 0.20
-COLOCATION_WEIGHT_RTO = 0.25
-COLOCATION_WEIGHT_PRIORITY = 0.15
-COLOCATION_TOP_PAIRS = 10
 
 # ── Sensitivity analysis parameter variations ────────────────────────────────
 SENSITIVITY_ALLOC_VARIATIONS = [-0.10, -0.05, 0.05, 0.10]

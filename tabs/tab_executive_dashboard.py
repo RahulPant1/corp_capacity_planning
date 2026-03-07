@@ -2,11 +2,14 @@
 
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 
 from data.session_store import (
     get_active_scenario, get_floors, get_units, get_attendance,
     get_rule_config, is_data_loaded, get_last_data_edit,
+    get_daily_attendance_df,
 )
+from engine.forecasting import compute_week_ahead_forecast
 from components.metrics_cards import render_metric_row
 from components.charts import capacity_vs_demand_bar, utilization_donut, rto_need_vs_allocated_bar
 from engine.spatial import get_floor_utilization
@@ -223,6 +226,80 @@ def render(sidebar_state):
         st.plotly_chart(fig, use_container_width=True, key="exec_utilization_donut")
 
     st.divider()
+
+    # --- 1-Week Seat Forecast ---
+    daily_df = get_daily_attendance_df()
+    if daily_df is not None and not daily_df.empty:
+        week_fc = compute_week_ahead_forecast(daily_df, total_capacity=effective_total_seats)
+        if week_fc:
+            st.subheader("Next 7 Days — Seat Demand Forecast")
+            bar_colors = {"HIGH": "#e74c3c", "MEDIUM": "#f39c12", "LOW": "#27ae60"}
+            fig_wk = go.Figure(go.Bar(
+                x=[r["short_label"] for r in week_fc],
+                y=[r["expected_seats"] for r in week_fc],
+                marker_color=[bar_colors[r["status"]] for r in week_fc],
+                text=[f"{r['expected_seats']:,}" for r in week_fc],
+                textposition="outside",
+                customdata=[[r["capacity_pct"]] for r in week_fc],
+                hovertemplate="%{x}<br>Expected: %{y:,} seats<br>Utilization: %{customdata[0]:.0%}<extra></extra>",
+            ))
+            if effective_total_seats:
+                fig_wk.add_hline(
+                    y=effective_total_seats, line_dash="dash", line_color="grey",
+                    annotation_text=f"Capacity: {effective_total_seats:,}",
+                    annotation_position="top right",
+                )
+            fig_wk.update_layout(
+                yaxis_title="Expected Seats",
+                height=260,
+                margin=dict(t=20, b=10),
+                showlegend=False,
+            )
+            st.plotly_chart(fig_wk, use_container_width=True, key="dash_week_fc")
+            peak_day = max(week_fc, key=lambda r: r["expected_seats"])
+            pct_str = f" (~{peak_day['capacity_pct']:.0%} utilization)" if effective_total_seats else ""
+            st.caption(
+                f"📅 Peak day: **{peak_day['weekday_name']}** — "
+                f"~{peak_day['expected_seats']:,} seats expected{pct_str}. "
+                "Use for amenity planning: catering, parking, meeting rooms."
+            )
+            with st.expander("Per-unit breakdown →"):
+                from engine.forecasting import compute_dow_patterns
+                unit_dow = compute_dow_patterns(daily_df)
+                if not unit_dow.empty:
+                    rows_fc = []
+                    for r in week_fc:
+                        day_data = unit_dow[unit_dow["day_of_week"] == r["date"].weekday()]
+                        for _, row in day_data.iterrows():
+                            rows_fc.append({
+                                "Day": r["weekday_name"],
+                                "Unit": row["unit_name"],
+                                "Expected Seats": int(row["median_count"]),
+                            })
+                    if rows_fc:
+                        pivot_df = (
+                            pd.DataFrame(rows_fc)
+                            .pivot(index="Unit", columns="Day", values="Expected Seats")
+                            .fillna(0)
+                            .astype(int)
+                        )
+                        # Order columns Mon→Fri
+                        day_order = [r["weekday_name"] for r in week_fc]
+                        pivot_df = pivot_df[[c for c in day_order if c in pivot_df.columns]]
+                        st.dataframe(pivot_df, use_container_width=True)
+            st.divider()
+
+    # --- Scenario Comparison Callout ---
+    matrix_results = st.session_state.get("cmp_matrix_results")
+    if matrix_results:
+        from engine.scenario_comparison import get_best_scenario, build_explanation
+        best = get_best_scenario(matrix_results)
+        if best and not str(best.get("opt_status", "")).startswith("Error"):
+            st.info(
+                f"**Scenario Comparison Matrix:** #{best['rank']} scenario ranked best — "
+                f"{build_explanation(best)} "
+                f"*(Go to What-If Analysis → Scenario Comparison Matrix to adopt)*"
+            )
 
     # --- Alerts ---
     # Collect alerts by category

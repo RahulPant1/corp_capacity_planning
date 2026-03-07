@@ -58,24 +58,24 @@ footer { display: none !important; }
 
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📊 Executive Dashboard",
-        "👥 Unit Impact View",
-        "🏗️ Spatial / Floor View",
         "🧪 Scenario Lab",
         "🤖 What-If Analysis",
-        "📈 Demand Forecasting",
+        "🏗️ Spatial / Floor View",
+        "👥 Unit Impact View",
+        "📈 Demand Analytics",
         "⚙️ Admin",
     ])
 
     with tab1:
         tab_executive_dashboard.render(sidebar_state)
     with tab2:
-        tab_unit_impact.render(sidebar_state)
-    with tab3:
-        tab_spatial_floor.render(sidebar_state)
-    with tab4:
         tab_scenario_lab.render(sidebar_state)
-    with tab5:
+    with tab3:
         tab_optimization.render(sidebar_state)
+    with tab4:
+        tab_spatial_floor.render(sidebar_state)
+    with tab5:
+        tab_unit_impact.render(sidebar_state)
     with tab6:
         tab_forecasting.render(sidebar_state)
     with tab7:

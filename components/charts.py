@@ -193,48 +193,6 @@ def tornado_chart(
     return fig
 
 
-def colocation_heatmap(
-    scores: List[dict],
-    title: str = "Unit Co-location Affinity",
-) -> go.Figure:
-    """Heatmap of pairwise co-location scores (top pairs only)."""
-    if not scores:
-        return go.Figure()
-
-    unit_set = set()
-    for s in scores:
-        unit_set.add(s["unit_a"])
-        unit_set.add(s["unit_b"])
-    unit_list = sorted(unit_set)
-
-    n = len(unit_list)
-    idx = {name: i for i, name in enumerate(unit_list)}
-    matrix = [[0.0] * n for _ in range(n)]
-    for s in scores:
-        i, j = idx[s["unit_a"]], idx[s["unit_b"]]
-        matrix[i][j] = s["score"]
-        matrix[j][i] = s["score"]
-    for i in range(n):
-        matrix[i][i] = 1.0
-
-    fig = go.Figure(data=go.Heatmap(
-        z=matrix,
-        x=unit_list,
-        y=unit_list,
-        colorscale="Greens",
-        zmin=0, zmax=1,
-        text=[[f"{v:.2f}" for v in row] for row in matrix],
-        texttemplate="%{text}",
-        hovertemplate="Unit A: %{y}<br>Unit B: %{x}<br>Score: %{z:.2f}<extra></extra>",
-        colorbar=dict(title="Score"),
-    ))
-    fig.update_layout(
-        title=title,
-        height=max(400, n * 50),
-        xaxis_title="Unit",
-        yaxis_title="Unit",
-    )
-    return fig
 
 
 # ── Forecasting Charts ───────────────────────────────────────────────────

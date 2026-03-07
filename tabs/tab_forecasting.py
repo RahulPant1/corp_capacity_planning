@@ -38,7 +38,7 @@ def render(sidebar_state):
 - **Trend Analysis** — Linear regression + EMA on daily data → forecasted median/peak + suggested growth %
 - **Probabilistic Demand** — Instead of using peak attendance, compute 90th/95th/99th percentile → potential seat savings
 - **Day-of-Week Patterns** — Heatmap showing which days each unit is busiest (e.g., Tue/Wed peak)
-- **Demand Correlation** — Which units' attendance moves together (compete for seats on same days)
+- **Demand Correlation** *(analyst view)* — Which units' attendance moves together (compete for seats on same days)
 - **Capacity Breach Risk** — Probability that daily attendance exceeds allocated seats
 - **Temporal Clusters** — Groups units by similar attendance behavior for hot-desking opportunities
 
@@ -324,14 +324,15 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
     st.subheader("Advanced Insights")
 
     adv_tab1, adv_tab2, adv_tab3 = st.tabs([
-        "Demand Correlation", "Capacity Breach Risk", "Temporal Clusters",
+        "📊 Demand Correlation", "⚠️ Capacity Breach Risk", "🔗 Temporal Clusters",
     ])
 
     with adv_tab1:
         st.caption(
-            "Pearson correlation of daily attendance between units. "
-            "High positive = units peak together (compete for seats). "
-            "Negative = opportunity for desk sharing."
+            "ℹ️ **Analyst view:** Pearson correlation of daily attendance between units. "
+            "High positive = units peak together (compete for seats on the same days). "
+            "Negative = complementary patterns, opportunity for desk sharing. "
+            "Not required for scenario planning — useful for desk-sharing policy design."
         )
         corr_df = compute_demand_correlation(daily_df, unit_names)
         if not corr_df.empty:

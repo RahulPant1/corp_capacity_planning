@@ -97,15 +97,8 @@ Every scenario shows:
 
 #### 4. Demand Forecasting
 
-**Long-range (6-month trend):**
-- **Holt-Winters Additive ETS** — triple exponential smoothing capturing level, trend (damped), and Mon–Fri weekly seasonality; automatically selected when ≥ 12 weekday observations and < 20% data gaps exist; falls back to linear regression + EMA for sparse datasets
-- Widening 95% prediction intervals that grow with forecast horizon (more honest than fixed-width bands)
-- Model badge (Holt-Winters / Linear Reg.) + MAPE accuracy metric shown per unit
-- Forecast Summary table: 6-Month Change % (bounded ±100%), Trend Direction (↑ Growing / → Stable / ↓ Declining) — end-of-period projected values, floored at 0
-- "Apply 6-Month Growth Estimate" — push data-driven growth directly into What-If scenarios
-- Probabilistic demand at 90th/95th/99th percentile — quantifies potential seat savings vs. peak-based planning
-
-**Short-term tactical (5–21 days):**
+**Short-term tactical (5–21 days) — primary view:**
+- Attendance Trends chart with short-term horizon radio (6 / 10 / 15 / 21 days) — shows HW ETS forecast with widening confidence band for the selected horizon; KPI shows "Forecast Peak" at end of horizon + MAPE accuracy badge
 - Next 5 / 10 / 15 / 21 business day seat demand forecast ("How many seats will we need this week?")
 - Per-unit Holt-Winters ETS models; fallback to day-of-week medians + unit slope for sparse units
 - Configurable capacity risk threshold (default: >90% = alert)
@@ -113,6 +106,12 @@ Every scenario shows:
 - Per-unit daily breakdown toggle — see which teams drive demand on which days
 - Color-coded bar chart: green (safe) / amber (moderate) / red (>90% capacity)
 - **Peak Day Overflow Planning** — auto-surfaced when breach days exist: shows which floors have spare seats and which units have shortfalls, with a plain-English operational tip for temporary flex desk coordination
+
+**Long-range (6-month trend) — available via "Long-Term Planning" expander:**
+- **Holt-Winters Additive ETS** — triple exponential smoothing capturing level, trend (damped), and Mon–Fri weekly seasonality; automatically selected when ≥ 12 weekday observations and < 20% data gaps exist; falls back to linear regression + EMA for sparse datasets
+- Forecast Summary table: 6-Month Change % (bounded ±100%), Trend Direction (↑ Growing / → Stable / ↓ Declining) — end-of-period projected values, floored at 0
+- "Apply 6-Month Growth Estimate" — push data-driven growth directly into What-If scenarios
+- Probabilistic demand at 90th/95th/99th percentile — quantifies potential seat savings vs. peak-based planning
 
 **Demand Analytics Report Download:**
 - Full Excel (.xlsx) + PDF download directly from the Demand Analytics tab
@@ -133,6 +132,12 @@ Every scenario shows:
 **Temporal Clustering**: Groups departments by attendance correlation (≥0.7). Used for:
 - Floor placement diversity (cross-cluster co-location stabilizes floor utilization)
 - Identifying which units will simultaneously spike demand on the same day
+
+**Real vs Perceived Capacity Breach** *(Advanced Insights — dual view)*:
+- **📊 Statistical Risk (Historical)**: How often has actual attendance exceeded allocation? Breach probability, expected overflow days/month, seats to add — based purely on historical daily records
+- **🎯 Scenario Risk (Forecast vs Allocation)**: Does the short-term forecast peak exceed allocated seats? Compares HW demand forecast against policy-assigned allocation. Columns explicitly labeled `📋 [Scenario]` (policy-derived) vs `📊 [Statistical]` (attendance-derived) to eliminate ambiguity
+- **Real vs Perceived verdict per unit**: 🟠 Confirmed (both exceed) · 🔴 Real Breach (forecast only) · 🟡 Perceived Risk (historical 95th pct only) · 🟢 Safe
+- **Scenario selector**: Compare against the Active Scenario OR any result from the Scenario Comparison Matrix — lets planners test whether a different What-If policy would resolve the breach before committing to it
 
 ---
 
@@ -233,7 +238,7 @@ Ranks by efficiency; adopt best scenario in one click
 | 🤖 **What-If Analysis** | Unit overrides, policy simulation, LP optimizer (3 modes), cost estimation, sensitivity analysis, Scenario Comparison Matrix (24 combos, auto-ranked), report download (Excel + PDF) |
 | 🏗️ **Spatial / Floor View** | Floor utilization heatmap, consolidation suggestions |
 | 👥 **Unit Impact View** | Per-unit risk table, seat gap, fragmentation scores, floor assignments |
-| 📈 **Demand Analytics** | 6-month Holt-Winters ETS trend forecast (model badge + MAPE, 6M Change %, Trend Direction), probabilistic demand (90/95/99%), short-term forecast (5–21 days, per-unit HW models), **peak day overflow planning** (auto-shown on breach days), **peak day load balancing advisory** (auto-expands on overload), DOW heatmap, capacity breach risk, temporal clustering + cluster placement advisory, **report download (Excel + PDF)** |
+| 📈 **Demand Analytics** | Short-term trend chart (6/10/15/21-day radio, HW ETS + MAPE), probabilistic demand (90/95/99%), short-term seat demand forecast (5–21 days, per-unit HW models), **peak day overflow planning** (auto-shown on breach days), **peak day load balancing advisory** (auto-expands on overload), DOW heatmap, **Real vs Perceived Capacity Breach** (statistical + scenario risk dual-view; What-If scenario selector), temporal clustering + cluster placement advisory, 6-month forecast + Apply button (Long-Term Planning expander), **report download (Excel + PDF)** |
 | 🗂️ **Floor Plan Sandbox** | Upload/edit floor layouts, 4 quick actions (move unit, remove floor, add assignment, resize), impact simulation, re-optimize, accept & push to scenario |
 | ⚙️ **Admin** | Data upload (single Excel or 3-file, with step-by-step progress), base data editor, rule configuration, audit trail |
 
@@ -390,6 +395,7 @@ Ranks by efficiency; adopt best scenario in one click
 | *"How is the long-range 6-month forecast generated?"* | Holt-Winters Additive ETS with damped trend — the same statistical model used in professional demand planning software. It learns the weekly attendance rhythm (e.g., Tuesday/Wednesday peaks) from the data and projects forward with widening confidence bands. MAPE (Mean Absolute Percentage Error) is shown as the accuracy indicator. Falls back to linear regression for sparse datasets. |
 | *"What are the 'stagger suggestions' based on?"* | Each unit's historical peak day is identified from attendance data. The platform detects which days carry 15%+ above average load, then recommends the lowest-load alternative day for each conflicting unit. These are advisory — no auto-changes. |
 | *"What happens when demand exceeds our floor capacity on a specific day?"* | The Peak Day Overflow Planning panel automatically surfaces this when the short-term forecast shows >90% capacity days. It identifies which floors have unallocated spare seats and which units have seat shortfalls — giving Facilities a specific, actionable plan for temporary flex access on those days. No permanent reassignment is needed. |
+| *"How do we know if a capacity breach is real or just statistical noise?"* | The Demand Analytics tab has a "Real vs Perceived Capacity Breach" view with two sub-tabs. The Statistical Risk tab shows how often historical attendance exceeded allocation (frequency-based). The Scenario Risk tab compares the short-term forecast peak against allocated seats — columns are explicitly labeled [Scenario] (policy-driven) vs [Statistical] (data-driven) to remove ambiguity. The verdict per unit: Confirmed Breach / Real Breach / Perceived Risk / Safe. Planners can also swap the allocation source to any Scenario Comparison Matrix result to test whether a different What-If policy would resolve the breach. |
 | *"Who maintains this?"* | Minimal maintenance — quarterly data refresh (~2 hours). No infrastructure beyond a web server. The tool is self-contained. |
 | *"What's the rollout plan?"* | Three steps: (1) Data collection from Facilities + HR — 2–4 weeks. (2) Deploy to internal cloud — 1 week. (3) Train planners — 2 sessions. Total: 6–8 weeks to live. |
 | *"Is the 80% rule going away?"* | No — it's the foundation. The platform validates it against real attendance and surfaces where it over- or under-allocates. Leadership keeps control over the rule; the platform makes the consequences visible. |

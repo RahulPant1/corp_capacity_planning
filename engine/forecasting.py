@@ -115,12 +115,12 @@ def compute_unit_trend(
         residual_std = hw_fit["residual_std"]
         steps = np.arange(1, n_bdays + 1)
         pi_width = 1.96 * residual_std * np.sqrt(steps / len(bday_values))
-        hw_fcast_arr = hw_fcast.values
+        hw_fcast_arr = np.asarray(hw_fcast)  # safe: forecast() may return Series or ndarray
         forecast_upper = hw_fcast_arr + pi_width
         forecast_lower = np.maximum(0, hw_fcast_arr - pi_width)
 
         # Equivalent slope for backward compat with report generators
-        fitted = hw_fit["fitted_values"].values
+        fitted = np.asarray(hw_fit["fitted_values"])  # fittedvalues may be Series or ndarray
         hw_slope = (float(fitted[-1]) - float(fitted[0])) / len(fitted) if len(fitted) > 1 else 0.0
 
         # In-sample MAPE
@@ -130,7 +130,7 @@ def compute_unit_trend(
 
         mean_val = float(np.mean(fitted))
         trend_significant = abs(hw_slope) > 0.005 * mean_val if mean_val > 0 else False
-        six_month_value = max(0.0, float(hw_fcast.iloc[-1]))
+        six_month_value = max(0.0, float(hw_fcast_arr[-1]))
 
         return {
             "unit_name": unit_name,
@@ -380,10 +380,10 @@ def compute_week_ahead_forecast(
     n_days: int = 5,
     holiday_dates: Optional[List[str]] = None,
 ) -> List[dict]:
-    """Working-day attendance forecast using per-unit Holt-Winters ETS.
+    """Working-day attendance forecast using DOW patterns + overall trend slope.
 
-    Uses per-unit HW models where available; falls back to DOW medians + aggregate
-    trend slope for units with insufficient data.
+    Uses historical day-of-week medians (summed across all units) and applies
+    the overall trend slope as a recency adjustment. Fast — no per-unit model fitting.
 
     Args:
         n_days: Number of upcoming business days to forecast (default 5).
@@ -395,11 +395,21 @@ def compute_week_ahead_forecast(
     """
     from datetime import datetime, timedelta
 
-    dow_df = compute_dow_patterns(df)
+    dow_df = compute_dow_patterns(df)  # all units, all weekdays
     if dow_df.empty:
         return []
 
-    # Build holiday set
+    overall = compute_overall_trend(df)
+    slope = overall.get("trend_slope", 0.0) if overall else 0.0
+
+    # Sum medians across all units per weekday
+    dow_totals = (
+        dow_df.groupby("day_of_week")["median_count"]
+        .sum()
+        .to_dict()
+    )
+
+    # Build holiday set for fast lookup
     holiday_set = set()
     if holiday_dates:
         for h in holiday_dates:
@@ -408,7 +418,7 @@ def compute_week_ahead_forecast(
             except Exception:
                 pass
 
-    # Find next n_days business days
+    # Find next n_days working days, skipping holidays
     today = datetime.now().date()
     upcoming: List = []
     d = today + timedelta(days=1)
@@ -417,49 +427,10 @@ def compute_week_ahead_forecast(
             upcoming.append(d)
         d += timedelta(days=1)
 
-    # Per-unit HW models + DOW fallback data
-    unit_names = df["unit_name"].unique()
-    unit_hw: dict = {}    # {unit: hw_fit or None}
-    unit_last: dict = {}  # {unit: last observed business day Timestamp}
-    unit_dow: dict = {}   # {unit: {dow_int: median}}
-
-    for unit in unit_names:
-        unit_rows = dow_df[dow_df["unit_name"] == unit]
-        unit_dow[unit] = dict(zip(
-            unit_rows["day_of_week"].astype(int),
-            unit_rows["median_count"].astype(float),
-        ))
-        udf = df[df["unit_name"] == unit].sort_values("date")
-        bday_mask = pd.to_datetime(udf["date"]).dt.dayofweek < 5
-        bdays = udf[bday_mask]
-        if len(bdays) < HW_MIN_PERIODS:
-            unit_hw[unit] = None
-            continue
-        bday_values = bdays["in_office_count"].values.astype(float)
-        hw_fit = _fit_holt_winters(bday_values, HW_SEASONAL_PERIODS)
-        unit_hw[unit] = hw_fit
-        if hw_fit is not None:
-            unit_last[unit] = pd.Timestamp(bdays["date"].iloc[-1])
-
-    # Fallback: aggregate linear slope
-    overall = compute_overall_trend(df)
-    fallback_slope = overall.get("trend_slope", 0.0) if overall else 0.0
-
     results = []
     for i, day in enumerate(upcoming):
-        total_expected = 0.0
-        for unit in unit_names:
-            hw_fit = unit_hw.get(unit)
-            if hw_fit is not None and unit in unit_last:
-                steps = _bday_steps_ahead(unit_last[unit], pd.Timestamp(day))
-                total_expected += max(0.0, float(hw_fit["hw_result"].forecast(steps).iloc[-1]))
-            else:
-                total_expected += max(
-                    0.0,
-                    unit_dow.get(unit, {}).get(day.weekday(), 0.0) + fallback_slope * (i + 1),
-                )
-
-        expected = max(0, round(total_expected))
+        base = dow_totals.get(day.weekday(), 0)
+        expected = max(0, round(base + slope * (i + 1)))
         cap_pct = expected / total_capacity if total_capacity > 0 else 0.0
         status = "HIGH" if cap_pct > 0.85 else ("MEDIUM" if cap_pct > 0.65 else "LOW")
         results.append({
@@ -480,8 +451,8 @@ def compute_per_unit_forecast(
 ) -> List[dict]:
     """Per-unit attendance forecast for the next n_days business days.
 
-    Uses per-unit Holt-Winters ETS where available; falls back to DOW medians +
-    unit-level trend slope for units with insufficient data.
+    Uses per-unit DOW medians (fast — no model fitting). The per-unit breakdown
+    shows relative demand by team; DOW patterns dominate over short horizons.
 
     Returns List[dict]: unit_name, date, short_label, weekday_name, expected_seats.
     Returns [] if insufficient data.
@@ -491,6 +462,11 @@ def compute_per_unit_forecast(
     dow_df = compute_dow_patterns(df)
     if dow_df.empty:
         return []
+
+    # Build per-unit DOW medians: {unit_name: {dow_int: median}}
+    unit_dow: dict = {}
+    for _, row in dow_df.iterrows():
+        unit_dow.setdefault(row["unit_name"], {})[int(row["day_of_week"])] = float(row["median_count"])
 
     # Build holiday set
     holiday_set = set()
@@ -510,45 +486,10 @@ def compute_per_unit_forecast(
             upcoming.append(d)
         d += timedelta(days=1)
 
-    # Per-unit HW models + fallback data
-    unit_names = df["unit_name"].unique()
-    unit_hw: dict = {}    # {unit: hw_fit or None}
-    unit_last: dict = {}  # {unit: last observed business day Timestamp}
-    unit_dow: dict = {}   # {unit: {dow_int: median}}
-    unit_slopes: dict = {}  # {unit: fallback linear slope}
-
-    for unit in unit_names:
-        unit_rows = dow_df[dow_df["unit_name"] == unit]
-        unit_dow[unit] = dict(zip(
-            unit_rows["day_of_week"].astype(int),
-            unit_rows["median_count"].astype(float),
-        ))
-        trend = compute_unit_trend(df, unit, forecast_months=1)
-        unit_slopes[unit] = trend["trend_slope"] if trend else 0.0
-
-        udf = df[df["unit_name"] == unit].sort_values("date")
-        bday_mask = pd.to_datetime(udf["date"]).dt.dayofweek < 5
-        bdays = udf[bday_mask]
-        if len(bdays) < HW_MIN_PERIODS:
-            unit_hw[unit] = None
-            continue
-        bday_values = bdays["in_office_count"].values.astype(float)
-        hw_fit = _fit_holt_winters(bday_values, HW_SEASONAL_PERIODS)
-        unit_hw[unit] = hw_fit
-        if hw_fit is not None:
-            unit_last[unit] = pd.Timestamp(bdays["date"].iloc[-1])
-
     results = []
     for i, day in enumerate(upcoming):
-        for unit in unit_names:
-            hw_fit = unit_hw.get(unit)
-            if hw_fit is not None and unit in unit_last:
-                steps = _bday_steps_ahead(unit_last[unit], pd.Timestamp(day))
-                expected = max(0, round(float(hw_fit["hw_result"].forecast(steps).iloc[-1])))
-            else:
-                base = unit_dow.get(unit, {}).get(day.weekday(), 0.0)
-                slope = unit_slopes.get(unit, 0.0)
-                expected = max(0, round(base + slope * (i + 1)))
+        for unit, dow_medians in unit_dow.items():
+            expected = max(0, round(dow_medians.get(day.weekday(), 0.0)))
             results.append({
                 "unit_name": unit,
                 "date": day,

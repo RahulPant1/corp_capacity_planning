@@ -262,9 +262,14 @@ def render(sidebar_state):
         return
 
     breach_data = []   # populated later if scenario has allocation_results
+    summaries = []     # populated in Section 3 (long-term expander)
+    stf_results = []   # populated in Section 4b
+    alert_days = []    # populated in Section 4b
+    peak_data_tab = [] # populated in Section 5b
 
     unit_names = sorted(daily_df["unit_name"].unique())
     unit_options = ["All Units (Overall)"] + list(unit_names)
+    forecast_months = 6  # used by Forecast Summary expander and download report
 
     # ── Section 2: Trend Analysis ──────────────────────────────────────────
     st.divider()
@@ -276,17 +281,22 @@ def render(sidebar_state):
             "Select Unit", unit_options, index=0, key="forecast_unit_select",
         )
     with t_col2:
-        forecast_months = st.slider(
-            "Forecast Horizon (months)", 1, 12, FORECAST_DEFAULT_MONTHS,
-            key="forecast_horizon_slider",
+        _trend_days = st.radio(
+            "Forecast Horizon",
+            options=FORECAST_SHORT_TERM_DAYS_OPTIONS,
+            format_func=lambda x: f"{x} days",
+            horizontal=True,
+            index=1,   # default: 10 days
+            key="trend_horizon_radio",
         )
+        _trend_months = _trend_days / 22.0   # convert to months for engine
 
     # Compute trend (overall aggregate or per-unit) — cached per input combination
     if selected_unit == "All Units (Overall)":
-        trend = _cached_overall_trend(daily_df, forecast_months)
+        trend = _cached_overall_trend(daily_df, _trend_months)
         chart_label = "All Units (Total)"
     else:
-        trend = _cached_unit_trend(daily_df, selected_unit, forecast_months)
+        trend = _cached_unit_trend(daily_df, selected_unit, _trend_months)
         chart_label = selected_unit
 
     if trend:
@@ -303,7 +313,7 @@ def render(sidebar_state):
         tc1.metric("Current Median", f"{trend['current_median']:.0f}")
         tc2.metric("Trend Slope", f"{trend['trend_slope']:+.2f}/day")
         tc3.metric("Residual Std", f"±{trend['residual_std']:.1f}")
-        tc4.metric("6M Forecast", f"{trend['six_month_value']:.0f} seats")
+        tc4.metric(f"Forecast Peak ({_trend_days}d)", f"{trend['six_month_value']:.0f} seats")
         model_label = "Holt-Winters" if trend.get("model_type") == "holt_winters" else "Linear Reg."
         mape = trend.get("mape")
         tc5.metric("Model", model_label,
@@ -335,9 +345,10 @@ def render(sidebar_state):
    `1.96 × residual_std × √(h/n)`, where *h* = steps ahead and *n* = historical observations.
    The band is deliberately wider at longer horizons to represent genuine uncertainty.
 
-5. **6M Forecast** — end-of-horizon projected value, floored at 0. **MAPE** (Mean Absolute
-   Percentage Error) on in-sample fitted values is shown as the model accuracy indicator.
-   Use "Apply 6-Month Growth Estimate" in the Forecast Summary to push values to your scenario.
+5. **Short-Term Forecast Peak** — projected value at the end of the selected horizon, floored at 0.
+   **MAPE** (Mean Absolute Percentage Error) on in-sample fitted values is shown as the model
+   accuracy indicator. Use "Apply 6-Month Growth Estimate" in the **Long-Term Planning** expander
+   below to push long-term growth estimates to your scenario.
 
 **When HW is used:** Requires ≥ 12 weekday observations and < 20% gaps. Falls back to
 Linear Regression for sparse or weekend-heavy data.
@@ -360,75 +371,77 @@ Linear Regression for sparse or weekend-heavy data.
    (how much actual data deviates from the trend line). There is a 95% probability that
    future attendance will fall within this band, assuming the trend continues.
 
-5. **6M Forecast** — the projected attendance value at the **end** of the selected horizon
-   (e.g., day 180 for a 6-month view), floored at 0. The **Forecast Summary** table shows this
-   end-of-period value alongside the absolute and % change from current median. The 6M Change %
-   is bounded to ±100% to avoid artefacts from noisy short time-series. Use "Apply 6-Month Growth
-   Estimate" in the summary below to push these values to your active scenario.
+5. **Short-Term Forecast Peak** — the projected attendance at the **end** of the selected horizon,
+   floored at 0. The 6-month Change % (in the Long-Term Planning expander) is bounded to ±100%
+   to avoid artefacts from noisy short time-series. Use "Apply 6-Month Growth Estimate" in the
+   **Long-Term Planning** expander below to push long-term growth estimates to your active scenario.
 
 **Limitations:** Linear trend assumes constant growth rate. Seasonal patterns (e.g., holiday dips)
 or structural changes (e.g., new RTO policy) may cause the actual trajectory to deviate.
 Holt-Winters ETS activates automatically once ≥ 12 weekday observations are available.
             """)
 
-    # ── Section 3: Forecast Summary ────────────────────────────────────────
+    # ── Section 3: Forecast Summary (Long-Term, collapsed by default) ───────
     st.divider()
-    st.subheader("Forecast Summary (All Units)")
-
-    summaries = _cached_forecast_summary(daily_df, tuple(unit_names), forecast_months)
-    if summaries:
-        summary_df = pd.DataFrame(summaries)
-        display_df = summary_df[[
-            "unit_name", "current_median", "current_peak",
-            "forecasted_median", "six_month_change", "six_month_change_pct", "trend_direction",
-        ]].copy()
-        display_df["six_month_change"] = display_df["six_month_change"].apply(
-            lambda x: f"+{x}" if x > 0 else str(x)
-        )
-        display_df["six_month_change_pct"] = display_df["six_month_change_pct"].apply(
-            lambda x: f"+{x:.1f}%" if x > 0 else f"{x:.1f}%"
-        )
-        display_df.columns = [
-            "Unit", "Current Median", "Current Peak",
-            f"Forecast Median ({forecast_months}m)",
-            "6M Change (seats)", "6M Change %", "Trend",
-        ]
+    with st.expander("Long-Term Planning — 6-Month Forecast (All Units)", expanded=False):
         st.caption(
-            f"Forecast Median = projected attendance at end of {forecast_months}-month horizon. "
-            "Negative forecasts floored at 0. 6M Change % bounded to ±100% to suppress noise artefacts."
+            "Projected attendance at 6 months out per unit. "
+            "Use 'Apply' to push data-driven growth estimates to What-If Analysis."
         )
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        summaries = _cached_forecast_summary(daily_df, tuple(unit_names), 6)
+        if summaries:
+            summary_df = pd.DataFrame(summaries)
+            display_df = summary_df[[
+                "unit_name", "current_median", "current_peak",
+                "forecasted_median", "six_month_change", "six_month_change_pct", "trend_direction",
+            ]].copy()
+            display_df["six_month_change"] = display_df["six_month_change"].apply(
+                lambda x: f"+{x}" if x > 0 else str(x)
+            )
+            display_df["six_month_change_pct"] = display_df["six_month_change_pct"].apply(
+                lambda x: f"+{x:.1f}%" if x > 0 else f"{x:.1f}%"
+            )
+            display_df.columns = [
+                "Unit", "Current Median", "Current Peak",
+                "Forecast Median (6m)",
+                "6M Change (seats)", "6M Change %", "Trend",
+            ]
+            st.caption(
+                "Forecast Median = projected attendance at end of 6-month horizon. "
+                "Negative forecasts floored at 0. 6M Change % bounded to ±100% to suppress noise artefacts."
+            )
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-        # Apply button
-        if is_data_loaded():
-            if st.button(
-                "Apply 6-Month Growth Estimate to Active Scenario",
-                type="primary", key="btn_apply_growth",
-            ):
-                scenario = get_active_scenario()
-                if scenario and not scenario.is_locked:
-                    for s in summaries:
-                        override = scenario.unit_overrides.get(
-                            s["unit_name"],
-                            ScenarioOverride(unit_name=s["unit_name"]),
+            # Apply button
+            if is_data_loaded():
+                if st.button(
+                    "Apply 6-Month Growth Estimate to Active Scenario",
+                    type="primary", key="btn_apply_growth",
+                ):
+                    scenario = get_active_scenario()
+                    if scenario and not scenario.is_locked:
+                        for s in summaries:
+                            override = scenario.unit_overrides.get(
+                                s["unit_name"],
+                                ScenarioOverride(unit_name=s["unit_name"]),
+                            )
+                            override.hc_growth_pct = s["suggested_growth_pct"]
+                            scenario.unit_overrides[s["unit_name"]] = override
+                        update_scenario(scenario)
+                        add_audit_entry(
+                            "forecast_apply", scenario.scenario_id,
+                            "hc_growth_pct", "manual", "forecasted",
+                            rationale=f"Applied {len(summaries)} data-driven growth forecasts",
                         )
-                        override.hc_growth_pct = s["suggested_growth_pct"]
-                        scenario.unit_overrides[s["unit_name"]] = override
-                    update_scenario(scenario)
-                    add_audit_entry(
-                        "forecast_apply", scenario.scenario_id,
-                        "hc_growth_pct", "manual", "forecasted",
-                        rationale=f"Applied {len(summaries)} data-driven growth forecasts",
-                    )
-                    st.success(
-                        f"Applied 6-month growth estimates to {len(summaries)} units "
-                        f"in scenario '{scenario.name}'. "
-                        f"Re-run Policy Simulation in What-If Analysis to see updated demand."
-                    )
-                elif scenario and scenario.is_locked:
-                    st.warning("Active scenario is locked. Unlock it first.")
-                else:
-                    st.warning("No active scenario found.")
+                        st.success(
+                            f"Applied 6-month growth estimates to {len(summaries)} units "
+                            f"in scenario '{scenario.name}'. "
+                            f"Re-run Policy Simulation in What-If Analysis to see updated demand."
+                        )
+                    elif scenario and scenario.is_locked:
+                        st.warning("Active scenario is locked. Unlock it first.")
+                    else:
+                        st.warning("No active scenario found.")
 
     # ── Section 4: Probabilistic Demand ────────────────────────────────────
     st.divider()
@@ -785,18 +798,19 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
     st.subheader("Advanced Insights")
 
     adv_tab1, adv_tab2 = st.tabs([
-        "⚠️ Capacity Breach Risk", "🔗 Temporal Clusters",
+        "⚠️ Real vs Perceived Capacity Breach", "🔗 Temporal Clusters",
     ])
 
     with adv_tab1:
         st.caption(
-            "How often does actual attendance exceed your allocated seats? "
-            "Based on your historical daily data — no guesswork, just your own numbers. "
-            "Requires a Policy Simulation to have been run first."
+            "**Statistical Risk** (left tab): how often has historical attendance exceeded allocation? "
+            "**Scenario Risk** (right tab): does the short-term forecast exceed allocated seats? "
+            "Together they separate real operational breaches from historical variance."
         )
         if is_data_loaded():
             scenario = get_active_scenario()
             if scenario and scenario.allocation_results:
+                # ── shared: compute alloc_map and breach_data once for both sub-tabs ──
                 alloc_map = {
                     a.unit_name: a.allocated_seats
                     for a in scenario.allocation_results
@@ -810,60 +824,190 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
                         if result:
                             breach_data.append(result)
 
-                if breach_data:
-                    import math
+                breach_tab1, breach_tab2 = st.tabs([
+                    "📊 Statistical Risk (Historical)", "🎯 Scenario Risk (Forecast vs Allocation)",
+                ])
 
-                    def _risk_tier(prob):
-                        if prob >= 0.20:
-                            return "🔴 High"
-                        if prob >= 0.10:
-                            return "🟡 Medium"
-                        return "🟢 Low"
+                with breach_tab1:
+                    if breach_data:
+                        import math
 
-                    def _seats_to_fix(magnitude):
-                        return int(math.ceil(magnitude / 5) * 5) if magnitude > 0 else 0
+                        def _risk_tier(prob):
+                            if prob >= 0.20:
+                                return "🔴 High"
+                            if prob >= 0.10:
+                                return "🟡 Medium"
+                            return "🟢 Low"
 
-                    # Summary callouts
-                    high_risk = [d for d in breach_data if d["breach_probability"] >= 0.20]
-                    most_critical = max(breach_data, key=lambda d: d["expected_breach_days_per_month"])
-                    if high_risk:
-                        st.warning(
-                            f"**{len(high_risk)} unit{'s' if len(high_risk) != 1 else ''} at high overflow risk** · "
-                            f"Most critical: **{most_critical['unit_name']}** — "
-                            f"~{most_critical['expected_breach_days_per_month']:.0f} overflow days/month"
+                        def _seats_to_fix(magnitude):
+                            return int(math.ceil(magnitude / 5) * 5) if magnitude > 0 else 0
+
+                        # Summary callouts
+                        high_risk = [d for d in breach_data if d["breach_probability"] >= 0.20]
+                        most_critical = max(breach_data, key=lambda d: d["expected_breach_days_per_month"])
+                        if high_risk:
+                            st.warning(
+                                f"**{len(high_risk)} unit{'s' if len(high_risk) != 1 else ''} at high overflow risk** · "
+                                f"Most critical: **{most_critical['unit_name']}** — "
+                                f"~{most_critical['expected_breach_days_per_month']:.0f} overflow days/month"
+                            )
+                        else:
+                            st.success(
+                                f"No units at high overflow risk · Most at-risk: **{most_critical['unit_name']}** — "
+                                f"~{most_critical['expected_breach_days_per_month']:.0f} overflow days/month"
+                            )
+
+                        # Redesigned table
+                        rows = []
+                        for d in breach_data:
+                            prob = d["breach_probability"]
+                            mag = d["avg_breach_magnitude"]
+                            rows.append({
+                                "Risk": _risk_tier(prob),
+                                "Unit": d["unit_name"],
+                                "Seats Allocated": d["allocated_seats"],
+                                "% Days Overflow": f"{prob:.0%} of days",
+                                "Overflow Days/Month": f"~{d['expected_breach_days_per_month']:.0f} days",
+                                "Extra People Needed": f"+{mag:.0f} people" if mag > 0 else "none",
+                                "Seats to Add (Fix)": f"+{_seats_to_fix(mag)}" if mag > 0 else "—",
+                            })
+                        # Sort by risk: high first
+                        risk_order = {"🔴 High": 0, "🟡 Medium": 1, "🟢 Low": 2}
+                        rows.sort(key=lambda r: risk_order.get(r["Risk"], 9))
+                        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                        st.caption(
+                            "**Risk:** 🔴 High = overflows 1 in 5 days or more · "
+                            "🟡 Medium = 1 in 10 days · 🟢 Low = rare  |  "
+                            "**Seats to Add** = average overflow gap rounded to nearest 5 — "
+                            "adding this many seats would eliminate most overflow days."
                         )
                     else:
-                        st.success(
-                            f"No units at high overflow risk · Most at-risk: **{most_critical['unit_name']}** — "
-                            f"~{most_critical['expected_breach_days_per_month']:.0f} overflow days/month"
+                        st.info("No breach data available for units in daily attendance data.")
+
+                with breach_tab2:
+                    st.caption(
+                        "Compares the **short-term forecast peak** (next N business days) against your "
+                        "scenario's allocated seats — crossed with the historical 95th percentile to tell "
+                        "real operational breaches from statistical variance."
+                    )
+
+                    # ── Scenario selector ────────────────────────────────────────────
+                    matrix_results = st.session_state.get("cmp_matrix_results", [])
+                    _scenario_options = {}
+
+                    _active_label = f"Active Scenario: {scenario.name}"
+                    _scenario_options[_active_label] = {"_alloc_map": alloc_map}
+
+                    for _mr in matrix_results:
+                        _alloc_opt = _mr.get("objective", "?")
+                        _alloc_pct_str = f"{_mr['alloc_pct']:.0%}" if _mr.get("alloc_pct") else "rule-based"
+                        _rank_str = f"#{_mr['rank']} (Best)" if _mr["rank"] == 1 else f"#{_mr['rank']}"
+                        _ml = f"{_rank_str} — RTO {_mr['rto_mandate']}d | {_alloc_pct_str} | {_alloc_opt}"
+                        _scenario_options[_ml] = {"_alloc_map": _mr.get("_unit_allocations", {})}
+
+                    _selected_label = st.selectbox(
+                        "Compare allocation from:",
+                        list(_scenario_options.keys()),
+                        key="breach_tab2_scenario_select",
+                        help="Select which scenario's allocation to compare against the short-term forecast.",
+                    )
+                    comparison_alloc_map = _scenario_options[_selected_label]["_alloc_map"]
+
+                    if _selected_label != _active_label:
+                        st.info(
+                            "To make this scenario permanent, go to "
+                            "**What-If Analysis → Scenario Comparison Matrix** and click **Adopt Scenario**."
+                        )
+                    if not matrix_results:
+                        st.caption(
+                            "Run the **Scenario Comparison Matrix** in What-If Analysis to compare "
+                            "against alternative RTO / allocation scenarios."
                         )
 
-                    # Redesigned table
-                    rows = []
-                    for d in breach_data:
-                        prob = d["breach_probability"]
-                        mag = d["avg_breach_magnitude"]
-                        rows.append({
-                            "Risk": _risk_tier(prob),
-                            "Unit": d["unit_name"],
-                            "Seats Allocated": d["allocated_seats"],
-                            "% Days Overflow": f"{prob:.0%} of days",
-                            "Overflow Days/Month": f"~{d['expected_breach_days_per_month']:.0f} days",
-                            "Extra People Needed": f"+{mag:.0f} people" if mag > 0 else "none",
-                            "Seats to Add (Fix)": f"+{_seats_to_fix(mag)}" if mag > 0 else "—",
-                        })
-                    # Sort by risk: high first
-                    risk_order = {"🔴 High": 0, "🟡 Medium": 1, "🟢 Low": 2}
-                    rows.sort(key=lambda r: risk_order.get(r["Risk"], 9))
-                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-                    st.caption(
-                        "**Risk:** 🔴 High = overflows 1 in 5 days or more · "
-                        "🟡 Medium = 1 in 10 days · 🟢 Low = rare  |  "
-                        "**Seats to Add** = average overflow gap rounded to nearest 5 — "
-                        "adding this many seats would eliminate most overflow days."
-                    )
-                else:
-                    st.info("No breach data available for units in daily attendance data.")
+                    if not stf_results:
+                        st.info("Short-term forecast unavailable. Need at least 7 days of attendance data.")
+                    else:
+                        # Per-unit forecast peak: max expected_seats across all forecast days
+                        unit_fcast = _cached_per_unit_forecast(
+                            daily_df, stf_horizon,
+                            tuple(holiday_dates_stf) if holiday_dates_stf else (),
+                        )
+                        pu_peak_map = {}
+                        if unit_fcast:
+                            df_pu = pd.DataFrame(unit_fcast)
+                            for _pu_unit, _pu_grp in df_pu.groupby("unit_name"):
+                                pu_peak_map[_pu_unit] = int(_pu_grp["expected_seats"].max())
+
+                        # Per-unit 95th percentile (historical)
+                        pct95_map = {}
+                        for name in unit_names:
+                            pd_result = _cached_percentile_demand(daily_df, name)
+                            if pd_result:
+                                pct95_map[name] = int(pd_result["percentiles"].get(0.95, 0))
+
+                        # Build verdict rows using the selected scenario's alloc map
+                        scenario_rows = []
+                        for name in unit_names:
+                            if name not in comparison_alloc_map:
+                                continue
+                            allocated = comparison_alloc_map[name]
+                            fcast_peak = pu_peak_map.get(name, 0)
+                            pct95 = pct95_map.get(name, 0)
+                            headroom = allocated - fcast_peak
+
+                            forecast_exceeds = fcast_peak > allocated
+                            historical_exceeds = pct95 > allocated
+
+                            if forecast_exceeds and historical_exceeds:
+                                verdict = "🟠 Confirmed Breach"
+                            elif forecast_exceeds:
+                                verdict = "🔴 Real Breach"
+                            elif historical_exceeds:
+                                verdict = "🟡 Perceived Risk"
+                            else:
+                                verdict = "🟢 Safe"
+
+                            scenario_rows.append({
+                                "Unit": name,
+                                # ── Scenario (policy) columns ──
+                                "📋 Allocated [Scenario]": allocated,
+                                f"📋 Forecast Peak ({stf_horizon}d) [Scenario]": fcast_peak,
+                                "📋 Headroom [Scenario]": f"{headroom:+,}",
+                                # ── Statistical (historical) column ──
+                                "📊 95th Pct [Statistical]": pct95,
+                                "Verdict": verdict,
+                            })
+
+                        if scenario_rows:
+                            verdict_order = {
+                                "🟠 Confirmed Breach": 0, "🔴 Real Breach": 1,
+                                "🟡 Perceived Risk": 2, "🟢 Safe": 3,
+                            }
+                            scenario_rows.sort(key=lambda r: verdict_order.get(r["Verdict"], 9))
+
+                            real_count = sum(1 for r in scenario_rows if "Breach" in r["Verdict"])
+                            if real_count:
+                                st.error(
+                                    f"**{real_count} unit{'s' if real_count != 1 else ''} forecast to exceed "
+                                    f"allocation in the next {stf_horizon} days.** Immediate action recommended."
+                                )
+                            else:
+                                st.success(
+                                    f"No units forecast to exceed allocation in the next {stf_horizon} days."
+                                )
+
+                            st.dataframe(pd.DataFrame(scenario_rows), use_container_width=True, hide_index=True)
+                            st.caption(
+                                "📋 **[Scenario]** columns = values derived from your allocation policy (seats assigned by rules).  "
+                                "📊 **[Statistical]** column = derived from historical attendance data only.  |  "
+                                "**🟠 Confirmed** = forecast AND 95th pct both exceed allocation.  "
+                                "**🔴 Real Breach** = forecast exceeds allocation (act now).  "
+                                "**🟡 Perceived Risk** = only 95th pct exceeds (variance — monitor).  "
+                                "**🟢 Safe** = neither exceeds."
+                            )
+                        else:
+                            st.info("No matching units between forecast data and scenario allocation.")
+
             else:
                 st.info("Run a Policy Simulation in the What-If Analysis tab first to see breach risk.")
         else:
@@ -1011,7 +1155,7 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
     # ── Download Report ────────────────────────────────────────────────────
     st.divider()
     _render_demand_download(
-        daily_df, unit_names, forecast_months,
+        daily_df, unit_names, 6,  # always 6-month label for the report
         summaries, stf_results, alert_days,
         dow_df, conflict, peak_data_tab,
         breach_data, clusters,

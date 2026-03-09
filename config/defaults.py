@@ -93,6 +93,8 @@ FORECAST_EMA_SPAN = 21
 FORECAST_SHORT_TERM_DAYS_OPTIONS = [5, 10, 15, 21]   # Horizon choices for short-term forecast
 FORECAST_CAPACITY_ALERT_THRESHOLD = 0.90              # Days above this % trigger a capacity risk alert
 DOW_OVERLOAD_FACTOR = 1.15                            # Day load > mean * factor = overloaded
+HW_MIN_PERIODS = 12                                   # Min observations to attempt Holt-Winters fit
+HW_SEASONAL_PERIODS = 5                               # Business week (Mon-Fri)
 
 # ── Scenario Comparison Matrix ───────────────────────────────────────────
 COMPARISON_MAX_COMBINATIONS = 24

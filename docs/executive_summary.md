@@ -34,6 +34,7 @@ A **data-driven seat planning platform** that combines:
 | Floor optimization | Not possible | LP-based, automated |
 | Short-term demand visibility | None | 5–21 day forecast with capacity alerts |
 | Peak day conflicts | Unknown | Auto-detected with stagger suggestions |
+| Overflow floor planning | Not visible | Auto-identified: available flex floors surfaced on breach days |
 | Audit trail | None | Full change log |
 
 ---
@@ -97,28 +98,36 @@ Every scenario shows:
 #### 4. Demand Forecasting
 
 **Long-range (6-month trend):**
-- Linear regression + Exponential Moving Average on daily attendance data
-- 95% confidence bands
-- Per-unit and company-wide projections
-- "Apply Forecasted Growth" — push data-driven growth rates directly into What-If scenarios
+- **Holt-Winters Additive ETS** — triple exponential smoothing capturing level, trend (damped), and Mon–Fri weekly seasonality; automatically selected when ≥ 12 weekday observations and < 20% data gaps exist; falls back to linear regression + EMA for sparse datasets
+- Widening 95% prediction intervals that grow with forecast horizon (more honest than fixed-width bands)
+- Model badge (Holt-Winters / Linear Reg.) + MAPE accuracy metric shown per unit
+- Forecast Summary table: 6-Month Change % (bounded ±100%), Trend Direction (↑ Growing / → Stable / ↓ Declining) — end-of-period projected values, floored at 0
+- "Apply 6-Month Growth Estimate" — push data-driven growth directly into What-If scenarios
 - Probabilistic demand at 90th/95th/99th percentile — quantifies potential seat savings vs. peak-based planning
 
 **Short-term tactical (5–21 days):**
-- Next 5 / 10 / 15 / 21 business day seat demand forecast
-- Uses historical day-of-week patterns + trend slope recency adjustment
+- Next 5 / 10 / 15 / 21 business day seat demand forecast ("How many seats will we need this week?")
+- Per-unit Holt-Winters ETS models; fallback to day-of-week medians + unit slope for sparse units
 - Configurable capacity risk threshold (default: >90% = alert)
 - Holiday exclusion — configured dates are automatically skipped
 - Per-unit daily breakdown toggle — see which teams drive demand on which days
 - Color-coded bar chart: green (safe) / amber (moderate) / red (>90% capacity)
+- **Peak Day Overflow Planning** — auto-surfaced when breach days exist: shows which floors have spare seats and which units have shortfalls, with a plain-English operational tip for temporary flex desk coordination
+
+**Demand Analytics Report Download:**
+- Full Excel (.xlsx) + PDF download directly from the Demand Analytics tab
+- 8 sheets/pages: Executive Summary, Forecast Summary, Short-Term Forecast, DOW Patterns, Capacity Breach Risk, Load Balancing Advisory, Overflow Planning (conditional), Temporal Clusters
+- Every sheet includes a "Recommended Action" column with CPG-ready operational guidance
 
 #### 5. Behavioral Day-of-Week Analytics
 
 **DOW Heatmap**: Median in-office count by unit × weekday — identifies which days each department peaks.
 
-**RTO Load Balancing Advisory**:
+**Peak Day Load Balancing Advisory** *(renamed from "RTO Load Balancing Advisory" for clarity)*:
 - Automatically identifies each department's peak day
 - Detects cross-unit conflicts: multiple departments peaking on the same day
 - Generates stagger suggestions: "Engineering peaks on Wednesday — suggest shifting some demand to Monday (lightest company-wide day)"
+- Auto-expands when overloaded days are detected; collapsed when load is balanced
 - Advisory only — designed to inform management conversations, not auto-apply
 
 **Temporal Clustering**: Groups departments by attendance correlation (≥0.7). Used for:
@@ -220,13 +229,13 @@ Ranks by efficiency; adopt best scenario in one click
 
 | Tab | Key Capabilities |
 |-----|-----------------|
-| 📊 **Executive Dashboard** | KPI cards (supply/demand/gap), 1-week forecast card, Key Insights strip, Planning Alerts (capacity / RTO / other), AI Executive Brief |
+| 📊 **Executive Dashboard** | KPI cards (supply/demand/gap), 1-week forecast card + overflow risk callout (when >90% days detected), Key Insights strip, Planning Alerts (capacity / RTO / other), AI Executive Brief |
 | 🤖 **What-If Analysis** | Unit overrides, policy simulation, LP optimizer (3 modes), cost estimation, sensitivity analysis, Scenario Comparison Matrix (24 combos, auto-ranked), report download (Excel + PDF) |
 | 🏗️ **Spatial / Floor View** | Floor utilization heatmap, consolidation suggestions |
 | 👥 **Unit Impact View** | Per-unit risk table, seat gap, fragmentation scores, floor assignments |
-| 📈 **Demand Analytics** | 6-month trend forecast, probabilistic demand (90/95/99%), short-term forecast (5–21 days), RTO load balancing advisory, DOW heatmap, capacity breach risk, temporal clustering + cluster placement advisory |
+| 📈 **Demand Analytics** | 6-month Holt-Winters ETS trend forecast (model badge + MAPE, 6M Change %, Trend Direction), probabilistic demand (90/95/99%), short-term forecast (5–21 days, per-unit HW models), **peak day overflow planning** (auto-shown on breach days), **peak day load balancing advisory** (auto-expands on overload), DOW heatmap, capacity breach risk, temporal clustering + cluster placement advisory, **report download (Excel + PDF)** |
 | 🗂️ **Floor Plan Sandbox** | Upload/edit floor layouts, 4 quick actions (move unit, remove floor, add assignment, resize), impact simulation, re-optimize, accept & push to scenario |
-| ⚙️ **Admin** | Data upload (single Excel or 3-file), base data editor, rule configuration, audit trail |
+| ⚙️ **Admin** | Data upload (single Excel or 3-file, with step-by-step progress), base data editor, rule configuration, audit trail |
 
 ---
 
@@ -244,12 +253,14 @@ Ranks by efficiency; adopt best scenario in one click
 
 1. **Admin → Load Sample Data** *(0:00 – 0:20)*
    - Click **"Load Sample Data"**
-   - *Say:* "One click — 2 buildings, 4 towers, 20 floors, 8 business units, 90 days of attendance history. In production this pulls from your badge system and HRIS. All tabs are now ready."
+   - A step-by-step progress panel appears: *Generating profiles → 90-day attendance → Policy simulation → Clusters & holidays → Done ✓*
+   - *Say:* "One click — 2 buildings, 4 towers, 20 floors, 8 business units, 90 days of attendance history. You can see each step completing in real time. In production this pulls from your badge system and HRIS. All tabs are now ready."
 
 2. **Executive Dashboard** *(0:20 – 1:30)*
    - Point to **KPI cards** — supply, demand, seat gap, units with shortfall
    - Point to **1-Week Forecast card** — show next 5 days with RED/YELLOW/GREEN bars
    - *Say:* "This is something we don't have today. By Wednesday we're forecast to hit [X]% utilization — facilities, catering, parking all need to know this in advance."
+   - If a red overflow callout appears below the forecast: *Say:* "The platform flags it immediately — '[N] days this week exceed 90% capacity.' And it tells us exactly where to go for overflow floor options. We'll see that in Demand Analytics in a moment."
    - Point to **Key Insights strip** — read the top 🔴 risk card and top 💡 opportunity card
    - Scroll to **Planning Alerts** — point to the 3-column alert badge, open the 🟡 RTO Alerts expander
    - *Say:* "This is the one screen leadership sees every cycle. The insights strip tells you what to act on — biggest shortfall, best consolidation opportunity, estimated savings. The alerts tell you where the fires are."
@@ -288,17 +299,25 @@ Ranks by efficiency; adopt best scenario in one click
 
 **Steps:**
 
-1. **Demand Analytics → Short-Term Demand Forecast** *(3:30 – 4:15)*
+1. **Demand Analytics → Short-Term Seat Demand Forecast** *(3:30 – 4:00)*
    - Go to **Demand Analytics** tab
-   - In **Short-Term Demand Forecast**, select **21 days** on the horizon radio
-   - *Say:* "This is our next 3 weeks of seat demand — built from historical day-of-week patterns, adjusted for trend. Red days are above 90% capacity."
+   - In **Short-Term Seat Demand Forecast**, select **21 days** on the horizon radio
+   - *Say:* "This answers: how many seats will we need over the next 3 weeks? Built from historical day-of-week patterns, adjusted for trend. Red days are above 90% capacity."
    - If alert days show: *Say:* "We have [N] days flagged above 90%. That's not reactive — that's a 3-week early warning. Facilities can plan catering, parking, and meeting room allocation before it's a problem."
    - Toggle **"Per-unit breakdown"** ON briefly
    - *Say:* "We can drill into which teams are driving the demand on each day."
 
-2. **Demand Analytics → RTO Load Balancing Advisory** *(4:15 – 5:00)*
+2. **Demand Analytics → Peak Day Overflow Planning** *(4:00 – 4:20)*
+   *(This expander auto-opens if capacity risk days exist — no need to find it)*
+   - Point to the **Peak Day Overflow Planning** expander (auto-expanded)
+   - Point to the **Capacity risk days** column — show breach days
+   - Point to the **Available overflow floors** column — show spare seats by floor
+   - Point to the **Units with seat shortfall** table
+   - *Say:* "The platform immediately tells us which floors have spare seats and which units need them on those peak days. This is a temporary operational arrangement — no permanent reassignment, just coordinate with Facilities for flex access on those specific days."
+
+3. **Demand Analytics → Peak Day Load Balancing Advisory** *(4:20 – 5:00)*
    - Scroll to **Day-of-Week Attendance Patterns**
-   - Open the **"RTO Load Balancing Advisory"** expander
+   - The **"Peak Day Load Balancing Advisory"** expander is auto-expanded if overloaded days exist
    - Point to the **company-wide load bar chart** — show the overloaded day(s) in red
    - Point to the **Peak Day per Unit** table
    - *Say:* "Wednesday is our heaviest day — [N] departments all peak on the same day. Look: Engineering, Product, and Sales are all peaking together. That's not a coincidence — they have overlapping project rhythms."
@@ -345,13 +364,14 @@ Ranks by efficiency; adopt best scenario in one click
 
 | Time | Tab | Action | Key Message |
 |------|-----|--------|-------------|
-| 0:00 | Admin | Load Sample Data | "One click — all tabs ready, 90 days of data" |
-| 0:20 | Executive Dashboard | KPI cards → 1-Week Forecast → Key Insights → Planning Alerts (RTO expander) | "This is the one screen leadership sees — forecast, insights, alerts" |
+| 0:00 | Admin | Load Sample Data (watch progress steps) | "One click — all tabs ready, 90 days of data, progress visible" |
+| 0:20 | Executive Dashboard | KPI cards → 1-Week Forecast → overflow callout (if red days) → Key Insights → Planning Alerts (RTO expander) | "Forecast, overflow risk, insights, alerts — one screen" |
 | 1:30 | What-If Analysis | Run Policy Simulation | "Baseline in one click — validates 80% rule vs real data" |
 | 2:00 | What-If Analysis | Simulate & Optimize (RTO-Based) → Cost Estimation ($10K/seat) | "[$X M] annual savings from right-sizing" |
 | 3:00 | What-If Analysis | Sensitivity Analysis (Lean/Balanced/Conservative) | "Defensible under any assumption" |
-| 3:30 | Demand Analytics | Short-Term Forecast → 21 days → per-unit toggle | "3-week early warning before peaks hit" |
-| 4:15 | Demand Analytics | RTO Load Balancing Advisory → load bar chart → stagger suggestions | "Wed is overloaded — here's who to shift and where" |
+| 3:30 | Demand Analytics | Short-Term Seat Demand Forecast → 21 days → per-unit toggle | "3-week early warning before peaks hit" |
+| 4:00 | Demand Analytics | Peak Day Overflow Planning (auto-expanded) → overflow floors table | "These floors absorb the overflow — no permanent moves" |
+| 4:20 | Demand Analytics | Peak Day Load Balancing Advisory (auto-expanded) → load bar chart → stagger suggestions | "Wed is overloaded — here's who to shift and where" |
 | 5:00 | What-If Analysis | Scenario Comparison Matrix → Run → Adopt top scenario | "24 combos evaluated; best policy identified automatically" |
 | 6:00 | What-If Analysis | Download Boardroom Report (PDF) | "Board-ready in one click" |
 | 6:15 | Admin | Audit Trail | "Full governance — who changed what, when" |
@@ -366,8 +386,10 @@ Ranks by efficiency; adopt best scenario in one click
 | *"How accurate is the attendance data?"* | The platform works with whatever data you have — badge swipes, calendar data, surveys. Better data = better precision. Even with rough estimates, it outperforms the flat 80% rule. |
 | *"What if a unit refuses to give up floors?"* | The optimizer supports unit-level overrides — pin Engineering to Tower 1, guarantee Sales a minimum of X seats. Every constraint is configurable at run time. |
 | *"Can this integrate with our HRIS?"* | Yes — the platform accepts standard CSV/Excel exports. A direct API integration with Workday or SAP can be added. The data schema is documented. |
-| *"How is the short-term forecast generated?"* | It uses historical day-of-week medians from badge data, adjusted by the recent trend slope. No AI black box — the methodology is explained in the platform. Configured holidays are automatically excluded. |
+| *"How is the short-term forecast generated?"* | It uses per-unit Holt-Winters Additive ETS models (triple exponential smoothing capturing level, trend, and Mon–Fri weekly seasonality). Each unit's HW model forecasts demand on specific upcoming business days; results are summed for the total. Units with insufficient history fall back to day-of-week medians. Configured holidays are automatically excluded. The methodology is explained in full inside the platform. |
+| *"How is the long-range 6-month forecast generated?"* | Holt-Winters Additive ETS with damped trend — the same statistical model used in professional demand planning software. It learns the weekly attendance rhythm (e.g., Tuesday/Wednesday peaks) from the data and projects forward with widening confidence bands. MAPE (Mean Absolute Percentage Error) is shown as the accuracy indicator. Falls back to linear regression for sparse datasets. |
 | *"What are the 'stagger suggestions' based on?"* | Each unit's historical peak day is identified from attendance data. The platform detects which days carry 15%+ above average load, then recommends the lowest-load alternative day for each conflicting unit. These are advisory — no auto-changes. |
+| *"What happens when demand exceeds our floor capacity on a specific day?"* | The Peak Day Overflow Planning panel automatically surfaces this when the short-term forecast shows >90% capacity days. It identifies which floors have unallocated spare seats and which units have seat shortfalls — giving Facilities a specific, actionable plan for temporary flex access on those days. No permanent reassignment is needed. |
 | *"Who maintains this?"* | Minimal maintenance — quarterly data refresh (~2 hours). No infrastructure beyond a web server. The tool is self-contained. |
 | *"What's the rollout plan?"* | Three steps: (1) Data collection from Facilities + HR — 2–4 weeks. (2) Deploy to internal cloud — 1 week. (3) Train planners — 2 sessions. Total: 6–8 weeks to live. |
 | *"Is the 80% rule going away?"* | No — it's the foundation. The platform validates it against real attendance and surfaces where it over- or under-allocates. Leadership keeps control over the rule; the platform makes the consequences visible. |
@@ -382,6 +404,7 @@ Ranks by efficiency; adopt best scenario in one click
 | "We might have extra floors" | "We can free floors 5, 8, and 12 — saving $1.8M/year" |
 | "What if RTO changes?" | "Here's the exact impact on every unit and floor" |
 | "Wednesday felt busy" | "Wednesday is 94% capacity — flagged 3 weeks in advance" |
+| "We need more seats on Friday — where do we put people?" | "Floor X has 42 spare seats; units A and B are in shortfall — direct them there" |
 | "Why are teams scattered?" | "Cluster-diverse placement keeps peak-day floors balanced" |
 | "Trust the spreadsheet" | "Full audit trail, scenario comparison matrix, risk alerts" |
 
@@ -408,7 +431,7 @@ CPG offices are over-allocated using static rules that ignore actual attendance.
 - **Data inputs**: Headcount (HR/HRIS), daily attendance (badge systems), building floor plans (Facilities) — refreshed quarterly
 - **Allocation engine**: Flat % rule (e.g., 80%) adjusted for growth/attrition; validated against RTO Need formula `(Median HC + Peak Buffer) × (RTO Days / 5)`
 - **LP Optimizer**: Minimizes floors used + maximizes team cohesion; supports 3 objectives with runtime constraints (floor caps, tower pinning, demand guarantees, cluster diversity)
-- **Demand Forecasting**: Linear regression + EMA for 6-month trend; DOW-pattern model for 5–21 day tactical forecast with capacity risk alerting
+- **Demand Forecasting**: Holt-Winters Additive ETS (trend + seasonality + damped growth) for 6-month trend with MAPE accuracy metric; per-unit HW models for 5–21 day tactical forecast with capacity risk alerting; full Excel + PDF report download
 - **Scenario Comparison Matrix**: Automated evaluation of up to 24 alloc/RTO/capacity combinations; auto-ranked by efficiency
 - **Platform**: Web-based tool (Streamlit), deployable on internal cloud or Streamlit Cloud; no installation required
 - **Implementation timeline**: Data collection 2–4 weeks → Deployment ~1 week → Training 2–3 sessions

@@ -32,6 +32,122 @@ from config.defaults import (
 )
 
 
+# ── Cached wrappers ────────────────────────────────────────────────────────
+# Streamlit rerenders the entire tab on every widget interaction.  These wrappers
+# memoize expensive engine calls so they only execute when daily_df actually changes.
+
+@st.cache_data(show_spinner=False)
+def _cached_unit_trend(daily_df, unit_name, forecast_months):
+    return compute_unit_trend(daily_df, unit_name, forecast_months)
+
+@st.cache_data(show_spinner=False)
+def _cached_overall_trend(daily_df, forecast_months):
+    return compute_overall_trend(daily_df, forecast_months)
+
+@st.cache_data(show_spinner=False)
+def _cached_forecast_summary(daily_df, unit_names_tuple, forecast_months):
+    return compute_forecast_summary(daily_df, list(unit_names_tuple), forecast_months)
+
+@st.cache_data(show_spinner=False)
+def _cached_percentile_demand(daily_df, unit_name):
+    return compute_percentile_demand(daily_df, unit_name)
+
+@st.cache_data(show_spinner=False)
+def _cached_bootstrap_ci(daily_df, unit_name, confidence):
+    return bootstrap_confidence_interval(daily_df, unit_name, confidence)
+
+@st.cache_data(show_spinner=False)
+def _cached_week_ahead_forecast(daily_df, total_capacity, n_days, holiday_dates_tuple):
+    return compute_week_ahead_forecast(
+        daily_df, total_capacity, n_days,
+        list(holiday_dates_tuple) if holiday_dates_tuple else None,
+    )
+
+@st.cache_data(show_spinner=False)
+def _cached_per_unit_forecast(daily_df, n_days, holiday_dates_tuple):
+    return compute_per_unit_forecast(
+        daily_df, n_days=n_days,
+        holiday_dates=list(holiday_dates_tuple) if holiday_dates_tuple else None,
+    )
+
+@st.cache_data(show_spinner=False)
+def _cached_dow_patterns(daily_df):
+    return compute_dow_patterns(daily_df)
+
+@st.cache_data(show_spinner=False)
+def _cached_dow_conflict_analysis(daily_df):
+    return compute_dow_conflict_analysis(daily_df)
+
+@st.cache_data(show_spinner=False)
+def _cached_peak_day_per_unit(daily_df):
+    return compute_peak_day_per_unit(daily_df)
+
+@st.cache_data(show_spinner=False)
+def _cached_temporal_clustering(daily_df, unit_names_tuple):
+    return compute_temporal_clustering(daily_df, list(unit_names_tuple))
+
+
+def _render_demand_download(
+    daily_df, unit_names, forecast_months,
+    summaries, stf_results, alert_days,
+    dow_df, conflict, peak_data_tab,
+    breach_data, clusters,
+):
+    """Render the Download Demand Analytics Report section (Excel + PDF)."""
+    from datetime import date as _date
+    from engine.demand_report_generator import generate_demand_report
+    from engine.demand_pdf_report_generator import generate_demand_pdf_report
+
+    st.subheader("Download Demand Analytics Report")
+    st.caption(
+        "Exports all analytics sections with actionable insights: Forecast Summary, "
+        "Short-Term Outlook, DOW Patterns, Capacity Breach Risk, Load Balancing, "
+        "Overflow Planning (if simulation run), and Temporal Clusters."
+    )
+
+    scenario = get_active_scenario() if is_data_loaded() else None
+    floors = get_floors() if is_data_loaded() else []
+
+    _kwargs = dict(
+        daily_df=daily_df,
+        unit_names=unit_names,
+        rule_config=get_rule_config(),
+        forecast_months=forecast_months,
+        summaries=summaries,
+        stf_results=stf_results,
+        alert_days=alert_days,
+        dow_df=dow_df,
+        conflict=conflict,
+        peak_data=peak_data_tab,
+        breach_data=breach_data,
+        clusters=clusters,
+        scenario=scenario,
+        floors=floors,
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        xlsx_bytes = generate_demand_report(**_kwargs)
+        st.download_button(
+            label="Download Demand Report (.xlsx)",
+            data=xlsx_bytes,
+            file_name=f"demand_analytics_{_date.today()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="btn_demand_dl_xlsx",
+            use_container_width=True,
+        )
+    with col2:
+        pdf_bytes = generate_demand_pdf_report(**_kwargs)
+        st.download_button(
+            label="Download Demand Report (.pdf)",
+            data=pdf_bytes,
+            file_name=f"demand_analytics_{_date.today()}.pdf",
+            mime="application/pdf",
+            key="btn_demand_dl_pdf",
+            use_container_width=True,
+        )
+
+
 def render(sidebar_state):
     """Render the Demand Forecasting tab."""
     st.header("Demand Forecasting")
@@ -145,6 +261,8 @@ def render(sidebar_state):
         st.info("Upload daily attendance data above to enable forecasting features.")
         return
 
+    breach_data = []   # populated later if scenario has allocation_results
+
     unit_names = sorted(daily_df["unit_name"].unique())
     unit_options = ["All Units (Overall)"] + list(unit_names)
 
@@ -163,12 +281,12 @@ def render(sidebar_state):
             key="forecast_horizon_slider",
         )
 
-    # Compute trend (overall aggregate or per-unit)
+    # Compute trend (overall aggregate or per-unit) — cached per input combination
     if selected_unit == "All Units (Overall)":
-        trend = compute_overall_trend(daily_df, forecast_months)
+        trend = _cached_overall_trend(daily_df, forecast_months)
         chart_label = "All Units (Total)"
     else:
-        trend = compute_unit_trend(daily_df, selected_unit, forecast_months)
+        trend = _cached_unit_trend(daily_df, selected_unit, forecast_months)
         chart_label = selected_unit
 
     if trend:
@@ -181,18 +299,52 @@ def render(sidebar_state):
         )
         st.plotly_chart(fig, use_container_width=True, key="forecast_trend_chart")
 
-        tc1, tc2, tc3, tc4 = st.columns(4)
+        tc1, tc2, tc3, tc4, tc5 = st.columns(5)
         tc1.metric("Current Median", f"{trend['current_median']:.0f}")
-        tc2.metric("Trend Slope", f"{trend['trend_slope']:.2f}/day")
+        tc2.metric("Trend Slope", f"{trend['trend_slope']:+.2f}/day")
         tc3.metric("Residual Std", f"±{trend['residual_std']:.1f}")
-        tc4.metric("Suggested Growth %", f"{trend['suggested_growth_pct']:.1%}")
+        tc4.metric("6M Forecast", f"{trend['six_month_value']:.0f} seats")
+        model_label = "Holt-Winters" if trend.get("model_type") == "holt_winters" else "Linear Reg."
+        mape = trend.get("mape")
+        tc5.metric("Model", model_label,
+                   delta=f"MAPE {mape:.1%}" if mape is not None else None,
+                   delta_color="off")
     else:
         st.warning(f"Insufficient data for {selected_unit} (need at least 7 days).")
 
     # Methodology explanation
     with st.expander("How is this forecast projected?", expanded=False):
-        st.markdown("""
-**Methodology:**
+        if trend and trend.get("model_type") == "holt_winters":
+            st.markdown("""
+**Methodology: Holt-Winters Additive ETS (Exponential Smoothing)**
+
+1. **Historical data** (light blue dots) — raw daily in-office attendance counts.
+
+2. **EMA line** (solid blue) — 21-day Exponential Moving Average, smoothing daily noise.
+
+3. **Holt-Winters forecast** (dashed orange) — a triple-exponential smoothing model that
+   simultaneously tracks three components:
+   - **Level** — the current baseline attendance
+   - **Trend** — the rate of growth or decline (with damping to prevent runaway projections)
+   - **Seasonality** — the Mon–Fri weekly attendance rhythm (e.g., Tuesday/Wednesday peaks)
+
+   The model is fit to business-day-aligned data and projected forward using the learned
+   seasonal curve — producing a **realistic wavy forecast** rather than a straight line.
+
+4. **Widening confidence band** (shaded orange) — prediction intervals grow as
+   `1.96 × residual_std × √(h/n)`, where *h* = steps ahead and *n* = historical observations.
+   The band is deliberately wider at longer horizons to represent genuine uncertainty.
+
+5. **6M Forecast** — end-of-horizon projected value, floored at 0. **MAPE** (Mean Absolute
+   Percentage Error) on in-sample fitted values is shown as the model accuracy indicator.
+   Use "Apply 6-Month Growth Estimate" in the Forecast Summary to push values to your scenario.
+
+**When HW is used:** Requires ≥ 12 weekday observations and < 20% gaps. Falls back to
+Linear Regression for sparse or weekend-heavy data.
+            """)
+        else:
+            st.markdown("""
+**Methodology: Linear Regression**
 
 1. **Historical data** (light blue dots) — your raw daily in-office attendance counts.
 
@@ -208,37 +360,49 @@ def render(sidebar_state):
    (how much actual data deviates from the trend line). There is a 95% probability that
    future attendance will fall within this band, assuming the trend continues.
 
-5. **Suggested Growth %** — the trend slope annualized relative to the current median:
-   `(slope / current_median) × 365`. This can be applied directly to the What-If Analysis
-   unit overrides to replace manual estimates with data-driven projections.
+5. **6M Forecast** — the projected attendance value at the **end** of the selected horizon
+   (e.g., day 180 for a 6-month view), floored at 0. The **Forecast Summary** table shows this
+   end-of-period value alongside the absolute and % change from current median. The 6M Change %
+   is bounded to ±100% to avoid artefacts from noisy short time-series. Use "Apply 6-Month Growth
+   Estimate" in the summary below to push these values to your active scenario.
 
 **Limitations:** Linear trend assumes constant growth rate. Seasonal patterns (e.g., holiday dips)
 or structural changes (e.g., new RTO policy) may cause the actual trajectory to deviate.
-        """)
+Holt-Winters ETS activates automatically once ≥ 12 weekday observations are available.
+            """)
 
     # ── Section 3: Forecast Summary ────────────────────────────────────────
     st.divider()
     st.subheader("Forecast Summary (All Units)")
 
-    summaries = compute_forecast_summary(daily_df, unit_names, forecast_months)
+    summaries = _cached_forecast_summary(daily_df, tuple(unit_names), forecast_months)
     if summaries:
         summary_df = pd.DataFrame(summaries)
-        display_df = summary_df.copy()
-        display_df["suggested_growth_pct"] = display_df["suggested_growth_pct"].apply(
-            lambda x: f"{x:.1%}"
+        display_df = summary_df[[
+            "unit_name", "current_median", "current_peak",
+            "forecasted_median", "six_month_change", "six_month_change_pct", "trend_direction",
+        ]].copy()
+        display_df["six_month_change"] = display_df["six_month_change"].apply(
+            lambda x: f"+{x}" if x > 0 else str(x)
+        )
+        display_df["six_month_change_pct"] = display_df["six_month_change_pct"].apply(
+            lambda x: f"+{x:.1f}%" if x > 0 else f"{x:.1f}%"
         )
         display_df.columns = [
             "Unit", "Current Median", "Current Peak",
-            f"Forecasted Median ({forecast_months}m)",
-            f"Forecasted Peak ({forecast_months}m)",
-            "Suggested Growth %",
+            f"Forecast Median ({forecast_months}m)",
+            "6M Change (seats)", "6M Change %", "Trend",
         ]
+        st.caption(
+            f"Forecast Median = projected attendance at end of {forecast_months}-month horizon. "
+            "Negative forecasts floored at 0. 6M Change % bounded to ±100% to suppress noise artefacts."
+        )
         st.dataframe(display_df, use_container_width=True, hide_index=True)
 
         # Apply button
         if is_data_loaded():
             if st.button(
-                "Apply Forecasted Growth to Active Scenario",
+                "Apply 6-Month Growth Estimate to Active Scenario",
                 type="primary", key="btn_apply_growth",
             ):
                 scenario = get_active_scenario()
@@ -257,7 +421,7 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
                         rationale=f"Applied {len(summaries)} data-driven growth forecasts",
                     )
                     st.success(
-                        f"Applied forecasted growth to {len(summaries)} units "
+                        f"Applied 6-month growth estimates to {len(summaries)} units "
                         f"in scenario '{scenario.name}'. "
                         f"Re-run Policy Simulation in What-If Analysis to see updated demand."
                     )
@@ -286,7 +450,7 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
 
     demand_data = []
     for name in unit_names:
-        result = compute_percentile_demand(daily_df, name)
+        result = _cached_percentile_demand(daily_df, name)
         if result:
             demand_data.append(result)
 
@@ -314,7 +478,7 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
         # Detail table with bootstrap CI + scenario allocation comparison
         detail_rows = []
         for d in demand_data:
-            bs = bootstrap_confidence_interval(daily_df, d["unit_name"], confidence)
+            bs = _cached_bootstrap_ci(daily_df, d["unit_name"], confidence)
             current_alloc = alloc_map.get(d["unit_name"])
             pct_val = d["percentiles"][confidence]
             detail_rows.append({
@@ -340,10 +504,11 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
 
     # ── Section 4b: Short-Term Demand Forecast ─────────────────────────────
     st.divider()
-    st.subheader("Short-Term Demand Forecast")
+    st.subheader("Short-Term Seat Demand Forecast")
     st.caption(
-        "Tactical seat demand forecast for the next 5–21 business days. "
-        "Uses day-of-week patterns from your historical data with a trend-slope recency adjustment. "
+        "**How many seats will we need over the next 1–4 weeks?** "
+        "Built from your historical day-of-week patterns with a trend-slope recency correction. "
+        "Red bars = >90% capacity risk · Orange = >65% · Green = comfortable. "
         "Holidays configured in Admin are automatically excluded."
     )
 
@@ -358,6 +523,7 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
             index=0,
             key="stf_horizon_radio",
         )
+        st.caption("5 days = this week · 10 days = next 2 weeks · 15 days = 3 weeks · 21 days = one month")
     with stf_col2:
         stf_per_unit = st.toggle("Per-unit breakdown", value=False, key="stf_per_unit_toggle")
 
@@ -370,9 +536,9 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
         if floors_stf:
             total_cap_stf = sum(f.total_seats for f in floors_stf)
 
-    stf_results = compute_week_ahead_forecast(
-        daily_df, total_capacity=total_cap_stf,
-        n_days=stf_horizon, holiday_dates=holiday_dates_stf,
+    stf_results = _cached_week_ahead_forecast(
+        daily_df, total_cap_stf, stf_horizon,
+        tuple(holiday_dates_stf) if holiday_dates_stf else (),
     )
 
     if stf_results:
@@ -428,10 +594,82 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
         if holiday_dates_stf:
             st.caption(f"Holidays excluded: {', '.join(str(h) for h in holiday_dates_stf)}")
 
+        # ── Overflow Floor Planning Advisory ───────────────────────────────
+        if alert_days and is_data_loaded():
+            with st.expander("Peak Day Overflow Planning", expanded=True):
+                st.caption(
+                    "On capacity-breach days, these floors have unallocated seats that can temporarily absorb overflow. "
+                    "Coordinate with Facilities to designate them as flex space on those specific days — no permanent reassignment needed."
+                )
+                _of_scenario = get_active_scenario()
+                if _of_scenario and _of_scenario.floor_assignments and _of_scenario.allocation_results:
+                    from engine.spatial import get_floor_utilization
+                    _of_floors = get_floors()
+                    _of_util = get_floor_utilization(_of_floors, _of_scenario.floor_assignments)
+
+                    # Floors with spare capacity (potential overflow destinations)
+                    _flex_floors = sorted(
+                        [f for f in _of_util if f["available_seats"] > 0],
+                        key=lambda f: f["available_seats"], reverse=True,
+                    )
+                    # Units where current demand exceeds allocated seats
+                    _at_risk = sorted(
+                        [a for a in _of_scenario.allocation_results if a.seat_gap < 0],
+                        key=lambda a: a.seat_gap,
+                    )
+
+                    of_c1, of_c2 = st.columns(2)
+
+                    with of_c1:
+                        st.markdown("**Capacity risk days**")
+                        st.dataframe(
+                            pd.DataFrame([{
+                                "Day": r["weekday_name"],
+                                "Expected Seats": r["expected_seats"],
+                                "Capacity %": f"{r['capacity_pct']:.0%}",
+                            } for r in alert_days]),
+                            use_container_width=True, hide_index=True,
+                        )
+
+                    with of_c2:
+                        if _flex_floors:
+                            st.markdown("**Available overflow floors**")
+                            st.dataframe(
+                                pd.DataFrame([{
+                                    "Floor": f["floor_id"],
+                                    "Tower": f["tower_id"],
+                                    "Spare Seats": f["available_seats"],
+                                    "Current Use": f"{f['utilization_pct']:.0%}",
+                                } for f in _flex_floors[:6]]),
+                                use_container_width=True, hide_index=True,
+                            )
+                        else:
+                            st.warning("No floors have spare seats. Consider adding capacity in What-If Analysis.")
+
+                    if _at_risk:
+                        st.markdown("**Units with seat shortfall** (demand > allocation — most in need of overflow space)")
+                        st.dataframe(
+                            pd.DataFrame([{
+                                "Unit": a.unit_name,
+                                "Allocated Seats": a.allocated_seats,
+                                "Demand": a.effective_demand_seats,
+                                "Gap": a.seat_gap,
+                            } for a in _at_risk]),
+                            use_container_width=True, hide_index=True,
+                        )
+
+                    st.info(
+                        "**Overflow Tip:** Direct the units in the shortfall table above to the highest spare-seat floors on peak days. "
+                        "No changes to the scenario are needed — this is a temporary operational arrangement."
+                    )
+                else:
+                    st.info("Run a **Policy Simulation** in What-If Analysis first to see floor-level overflow options.")
+
         # Per-unit breakdown
         if stf_per_unit:
-            unit_fcast = compute_per_unit_forecast(
-                daily_df, n_days=stf_horizon, holiday_dates=holiday_dates_stf,
+            unit_fcast = _cached_per_unit_forecast(
+                daily_df, stf_horizon,
+                tuple(holiday_dates_stf) if holiday_dates_stf else (),
             )
             if unit_fcast:
                 df_uf = pd.DataFrame(unit_fcast)
@@ -450,23 +688,28 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
     st.divider()
     st.subheader("Day-of-Week Attendance Patterns")
 
-    dow_df = compute_dow_patterns(daily_df)
+    dow_df = _cached_dow_patterns(daily_df)
     if not dow_df.empty:
         fig = dow_heatmap_chart(dow_df)
         st.plotly_chart(fig, use_container_width=True, key="dow_heatmap_chart")
         st.caption(
             "Median in-office count by day of week. Use this to identify peak days "
-            "(e.g., Tue/Wed) and low-attendance days suitable for hot-desking policies."
+            "(e.g., Tue/Wed) and low-attendance days suitable for hot-desking policies. "
+            "See **Peak Day Load Balancing Advisory** below to find which units drive crowding and get stagger suggestions."
         )
 
-    # ── Section 5b: RTO Load Balancing Advisory ────────────────────────────
-    with st.expander("RTO Load Balancing Advisory", expanded=False):
+    # ── Section 5b: Peak Day Load Balancing Advisory ───────────────────────
+    # Pre-compute so we can auto-expand when overloaded days are detected
+    conflict = _cached_dow_conflict_analysis(daily_df)
+    _has_overload = bool(conflict.get("overloaded_days"))
+
+    with st.expander("Peak Day Load Balancing Advisory", expanded=_has_overload):
         st.markdown(
             "Identifies departments whose peak days cluster on the same weekday, "
-            "creating avoidable load spikes. Advisory suggestions help managers negotiate "
-            "voluntary RTO day shifts to flatten the weekly demand curve."
+            "creating avoidable load spikes. Shift suggestions help managers negotiate "
+            "voluntary RTO day changes to flatten the weekly demand curve. "
+            "**Red bars** below indicate days where total attendance exceeds 115% of the weekly average."
         )
-        conflict = compute_dow_conflict_analysis(daily_df)
 
         if conflict["day_loads"]:
             import plotly.graph_objects as go
@@ -504,7 +747,7 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
                 st.success("Load is well-balanced across the week — no overloaded days detected.")
 
             # Peak Day per Unit table
-            peak_data_tab = compute_peak_day_per_unit(daily_df)
+            peak_data_tab = _cached_peak_day_per_unit(daily_df)
             if peak_data_tab:
                 st.markdown("**Peak Day per Unit**")
                 peak_rows = [{
@@ -632,7 +875,7 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
             "Two units in the same group have a correlation ≥ 0.7 — meaning when one peaks, the other "
             "does too. Units in different groups have largely independent or opposite patterns."
         )
-        clusters = compute_temporal_clustering(daily_df, unit_names)
+        clusters = _cached_temporal_clustering(daily_df, tuple(unit_names))
         if clusters:
             _PALETTE = ["#4A90D9", "#E8734A", "#2ECC71", "#9B59B6", "#F39C12", "#1ABC9C"]
 
@@ -675,9 +918,8 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
 
             # ── DOW Profile Chart ──────────────────────────────────────
             st.markdown("**Why are they grouped? — Attendance Profile by Day**")
-            dow_df_clust = compute_dow_patterns(daily_df)
-            if not dow_df_clust.empty:
-                fig_clust = temporal_cluster_dow_chart(clusters, dow_df_clust)
+            if not dow_df.empty:
+                fig_clust = temporal_cluster_dow_chart(clusters, dow_df)
                 st.plotly_chart(fig_clust, use_container_width=True, key="temporal_cluster_dow")
 
             st.caption(
@@ -765,3 +1007,12 @@ or structural changes (e.g., new RTO policy) may cause the actual trajectory to 
                         )
         else:
             st.info("Need at least 2 units with daily data to compute clusters.")
+
+    # ── Download Report ────────────────────────────────────────────────────
+    st.divider()
+    _render_demand_download(
+        daily_df, unit_names, forecast_months,
+        summaries, stf_results, alert_days,
+        dow_df, conflict, peak_data_tab,
+        breach_data, clusters,
+    )

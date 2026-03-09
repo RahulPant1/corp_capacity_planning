@@ -9,7 +9,38 @@ from config.defaults import (
     FORECAST_CONFIDENCE_LEVELS,
     FORECAST_BOOTSTRAP_SAMPLES,
     DOW_OVERLOAD_FACTOR,
+    HW_MIN_PERIODS,
+    HW_SEASONAL_PERIODS,
 )
+
+
+# ── Private helpers ────────────────────────────────────────────────────────
+
+def _fit_holt_winters(values: np.ndarray, seasonal_periods: int = 5) -> Optional[dict]:
+    """Fit Holt-Winters additive ETS model. Returns result dict or None on failure."""
+    from statsmodels.tsa.holtwinters import ExponentialSmoothing
+    if len(values) < 2 * seasonal_periods:
+        return None
+    try:
+        model = ExponentialSmoothing(
+            values, trend="add", seasonal="add",
+            seasonal_periods=seasonal_periods,
+            damped_trend=True,
+            initialization_method="estimated",
+        )
+        fit = model.fit(optimized=True, remove_bias=True)
+        return {
+            "hw_result": fit,
+            "fitted_values": fit.fittedvalues,
+            "residual_std": float(np.std(fit.resid)),
+        }
+    except Exception:
+        return None
+
+
+def _bday_steps_ahead(last_date, target_date) -> int:
+    """Count business days from last_date (exclusive) to target_date (inclusive)."""
+    return max(1, len(pd.bdate_range(last_date, target_date)) - 1)
 
 
 # ── Trend Analysis ─────────────────────────────────────────────────────────
@@ -33,9 +64,12 @@ def compute_unit_trend(
     unit_name: str,
     forecast_months: int = 6,
 ) -> Optional[dict]:
-    """Compute linear trend + EMA for a single unit.
+    """Compute trend + EMA for a single unit.
 
-    Returns dict with historical/forecast arrays, slope, suggested_growth_pct.
+    Tries Holt-Winters additive ETS (trend + weekly seasonality) first; falls back
+    to linear regression if insufficient data or HW fitting fails.
+
+    Returns dict with historical/forecast arrays, slope, model_type, mape, etc.
     Returns None if fewer than 7 data points.
     """
     unit_df = df[df["unit_name"] == unit_name].sort_values("date").copy()
@@ -45,17 +79,83 @@ def compute_unit_trend(
     dates = pd.to_datetime(unit_df["date"].values)
     values = unit_df["in_office_count"].values.astype(float)
 
-    # Convert to integer days from start for regression
+    # EMA always computed on the original series
+    ema = pd.Series(values).ewm(span=FORECAST_EMA_SPAN, adjust=False).mean().values
+    current_median = float(np.median(values[-30:]) if len(values) >= 30 else np.median(values))
+
+    # ── Attempt Holt-Winters on business-day-aligned series ──────────────────
+    bday_mask = pd.to_datetime(unit_df["date"]).dt.dayofweek < 5
+    bday_df = unit_df[bday_mask].sort_values("date")
+
+    hw_fit = None
+    bday_values = None
+
+    if len(bday_df) >= HW_MIN_PERIODS:
+        bday_index = pd.bdate_range(bday_df["date"].iloc[0], bday_df["date"].iloc[-1])
+        bday_series = (
+            bday_df.set_index(pd.to_datetime(bday_df["date"]))["in_office_count"]
+            .reindex(bday_index)
+        )
+        fill_ratio = bday_series.isna().sum() / len(bday_index) if len(bday_index) > 0 else 1.0
+        if fill_ratio <= 0.20:
+            bday_series = bday_series.ffill().bfill()
+            bday_values = bday_series.values.astype(float)
+            hw_fit = _fit_holt_winters(bday_values, HW_SEASONAL_PERIODS)
+
+    if hw_fit is not None:
+        # ── Holt-Winters forecast path ────────────────────────────────────────
+        n_bdays = max(10, int(forecast_months * 21.7))
+        hw_fcast = hw_fit["hw_result"].forecast(n_bdays)
+
+        last_bday = pd.Timestamp(bday_df["date"].iloc[-1])
+        forecast_dates = pd.bdate_range(
+            start=last_bday + pd.Timedelta(days=1), periods=n_bdays
+        )
+
+        residual_std = hw_fit["residual_std"]
+        steps = np.arange(1, n_bdays + 1)
+        pi_width = 1.96 * residual_std * np.sqrt(steps / len(bday_values))
+        hw_fcast_arr = hw_fcast.values
+        forecast_upper = hw_fcast_arr + pi_width
+        forecast_lower = np.maximum(0, hw_fcast_arr - pi_width)
+
+        # Equivalent slope for backward compat with report generators
+        fitted = hw_fit["fitted_values"].values
+        hw_slope = (float(fitted[-1]) - float(fitted[0])) / len(fitted) if len(fitted) > 1 else 0.0
+
+        # In-sample MAPE
+        obs = bday_values[:len(fitted)]
+        nonzero = obs != 0
+        mape = float(np.mean(np.abs((obs[nonzero] - fitted[nonzero]) / obs[nonzero]))) if nonzero.any() else None
+
+        mean_val = float(np.mean(fitted))
+        trend_significant = abs(hw_slope) > 0.005 * mean_val if mean_val > 0 else False
+        six_month_value = max(0.0, float(hw_fcast.iloc[-1]))
+
+        return {
+            "unit_name": unit_name,
+            "historical_dates": dates,
+            "historical_values": values,
+            "trend_slope": hw_slope,
+            "trend_intercept": float(fitted[0]),
+            "ema_values": ema,
+            "forecast_dates": forecast_dates,
+            "forecast_median": hw_fcast_arr,
+            "forecast_upper": forecast_upper,
+            "forecast_lower": forecast_lower,
+            "residual_std": residual_std,
+            "trend_significant": trend_significant,
+            "six_month_value": six_month_value,
+            "current_median": current_median,
+            "model_type": "holt_winters",
+            "mape": mape,
+        }
+
+    # ── Linear regression fallback ────────────────────────────────────────────
     day_zero = dates[0]
     date_ints = np.array([(d - day_zero).days for d in dates])
-
-    # Linear regression (degree 1)
     slope, intercept = np.polyfit(date_ints, values, 1)
 
-    # Exponential moving average
-    ema = pd.Series(values).ewm(span=FORECAST_EMA_SPAN, adjust=False).mean().values
-
-    # Project forward
     last_date = dates[-1]
     forecast_dates = pd.date_range(
         last_date + pd.Timedelta(days=1),
@@ -65,19 +165,19 @@ def compute_unit_trend(
     future_day_ints = np.array([(d - day_zero).days for d in forecast_dates])
     forecast_trend = slope * future_day_ints + intercept
 
-    # Residual std for confidence bands
     residuals = values - (slope * date_ints + intercept)
     residual_std = float(np.std(residuals))
 
     forecast_upper = forecast_trend + 1.96 * residual_std
     forecast_lower = np.maximum(0, forecast_trend - 1.96 * residual_std)
 
-    # Suggested annual growth % from slope
-    current_median = float(np.median(values[-30:]) if len(values) >= 30 else np.median(values))
-    if current_median > 0:
-        annual_growth_pct = (slope / current_median) * 365
-    else:
-        annual_growth_pct = 0.0
+    n = len(values)
+    date_std = float(np.std(date_ints))
+    slope_se = (residual_std / (date_std * np.sqrt(n))) if date_std > 0 else float("inf")
+    t_stat = abs(slope) / slope_se if slope_se > 0 else 0.0
+    trend_significant = t_stat > 1.5
+
+    six_month_value = max(0.0, float(forecast_trend[-1]))
 
     return {
         "unit_name": unit_name,
@@ -91,8 +191,11 @@ def compute_unit_trend(
         "forecast_upper": forecast_upper,
         "forecast_lower": forecast_lower,
         "residual_std": residual_std,
-        "suggested_growth_pct": round(annual_growth_pct, 4),
+        "trend_significant": trend_significant,
+        "six_month_value": six_month_value,
         "current_median": current_median,
+        "model_type": "linear",
+        "mape": None,
     }
 
 
@@ -230,13 +333,40 @@ def compute_forecast_summary(
 
         fcast = trend["forecast_median"]
 
+        current_median = round(float(np.median(recent)))
+        current_peak = round(float(np.max(recent)))
+
+        # End-of-period forecast (actual day ~180 value), floored at 0
+        forecasted_median = max(0, round(float(fcast[-1])))
+        forecasted_peak = max(0, round(float(np.max(fcast))))
+
+        # 6-month change — absolute and % (bounded ±100%)
+        six_month_change = forecasted_median - current_median
+        if current_median > 0:
+            raw_pct = (six_month_change / current_median) * 100.0
+            six_month_change_pct = round(max(-100.0, min(200.0, raw_pct)), 1)
+        else:
+            six_month_change_pct = 0.0
+
+        # Trend direction based on significance + magnitude
+        if not trend["trend_significant"] or abs(six_month_change_pct) < 3:
+            trend_direction = "→ Stable"
+        elif six_month_change > 0:
+            trend_direction = "↑ Growing"
+        else:
+            trend_direction = "↓ Declining"
+
         summaries.append({
             "unit_name": name,
-            "current_median": round(float(np.median(recent))),
-            "current_peak": round(float(np.max(recent))),
-            "forecasted_median": round(float(np.median(fcast))),
-            "forecasted_peak": round(float(np.max(fcast))),
-            "suggested_growth_pct": trend["suggested_growth_pct"],
+            "current_median": current_median,
+            "current_peak": current_peak,
+            "forecasted_median": forecasted_median,
+            "forecasted_peak": forecasted_peak,
+            "six_month_change": six_month_change,
+            "six_month_change_pct": six_month_change_pct,
+            "trend_direction": trend_direction,
+            # Fraction form of 6m change % — used by "Apply" button for hc_growth_pct
+            "suggested_growth_pct": six_month_change_pct / 100.0,
         })
 
     return summaries
@@ -250,10 +380,10 @@ def compute_week_ahead_forecast(
     n_days: int = 5,
     holiday_dates: Optional[List[str]] = None,
 ) -> List[dict]:
-    """Working-day attendance forecast using DOW patterns + overall trend.
+    """Working-day attendance forecast using per-unit Holt-Winters ETS.
 
-    Uses historical day-of-week medians (summed across all units) and applies
-    the overall trend slope as a recency adjustment.
+    Uses per-unit HW models where available; falls back to DOW medians + aggregate
+    trend slope for units with insufficient data.
 
     Args:
         n_days: Number of upcoming business days to forecast (default 5).
@@ -265,21 +395,11 @@ def compute_week_ahead_forecast(
     """
     from datetime import datetime, timedelta
 
-    dow_df = compute_dow_patterns(df)  # all units, all weekdays
+    dow_df = compute_dow_patterns(df)
     if dow_df.empty:
         return []
 
-    overall = compute_overall_trend(df)
-    slope = overall.get("trend_slope", 0.0) if overall else 0.0
-
-    # Sum medians across all units per weekday
-    dow_totals = (
-        dow_df.groupby("day_of_week")["median_count"]
-        .sum()
-        .to_dict()
-    )
-
-    # Build holiday set for fast lookup
+    # Build holiday set
     holiday_set = set()
     if holiday_dates:
         for h in holiday_dates:
@@ -288,7 +408,7 @@ def compute_week_ahead_forecast(
             except Exception:
                 pass
 
-    # Find next n_days working days, skipping holidays
+    # Find next n_days business days
     today = datetime.now().date()
     upcoming: List = []
     d = today + timedelta(days=1)
@@ -297,10 +417,49 @@ def compute_week_ahead_forecast(
             upcoming.append(d)
         d += timedelta(days=1)
 
+    # Per-unit HW models + DOW fallback data
+    unit_names = df["unit_name"].unique()
+    unit_hw: dict = {}    # {unit: hw_fit or None}
+    unit_last: dict = {}  # {unit: last observed business day Timestamp}
+    unit_dow: dict = {}   # {unit: {dow_int: median}}
+
+    for unit in unit_names:
+        unit_rows = dow_df[dow_df["unit_name"] == unit]
+        unit_dow[unit] = dict(zip(
+            unit_rows["day_of_week"].astype(int),
+            unit_rows["median_count"].astype(float),
+        ))
+        udf = df[df["unit_name"] == unit].sort_values("date")
+        bday_mask = pd.to_datetime(udf["date"]).dt.dayofweek < 5
+        bdays = udf[bday_mask]
+        if len(bdays) < HW_MIN_PERIODS:
+            unit_hw[unit] = None
+            continue
+        bday_values = bdays["in_office_count"].values.astype(float)
+        hw_fit = _fit_holt_winters(bday_values, HW_SEASONAL_PERIODS)
+        unit_hw[unit] = hw_fit
+        if hw_fit is not None:
+            unit_last[unit] = pd.Timestamp(bdays["date"].iloc[-1])
+
+    # Fallback: aggregate linear slope
+    overall = compute_overall_trend(df)
+    fallback_slope = overall.get("trend_slope", 0.0) if overall else 0.0
+
     results = []
     for i, day in enumerate(upcoming):
-        base = dow_totals.get(day.weekday(), 0)
-        expected = max(0, round(base + slope * (i + 1)))
+        total_expected = 0.0
+        for unit in unit_names:
+            hw_fit = unit_hw.get(unit)
+            if hw_fit is not None and unit in unit_last:
+                steps = _bday_steps_ahead(unit_last[unit], pd.Timestamp(day))
+                total_expected += max(0.0, float(hw_fit["hw_result"].forecast(steps).iloc[-1]))
+            else:
+                total_expected += max(
+                    0.0,
+                    unit_dow.get(unit, {}).get(day.weekday(), 0.0) + fallback_slope * (i + 1),
+                )
+
+        expected = max(0, round(total_expected))
         cap_pct = expected / total_capacity if total_capacity > 0 else 0.0
         status = "HIGH" if cap_pct > 0.85 else ("MEDIUM" if cap_pct > 0.65 else "LOW")
         results.append({
@@ -321,7 +480,8 @@ def compute_per_unit_forecast(
 ) -> List[dict]:
     """Per-unit attendance forecast for the next n_days business days.
 
-    Uses per-unit DOW medians + unit-level trend slope as recency adjustment.
+    Uses per-unit Holt-Winters ETS where available; falls back to DOW medians +
+    unit-level trend slope for units with insufficient data.
 
     Returns List[dict]: unit_name, date, short_label, weekday_name, expected_seats.
     Returns [] if insufficient data.
@@ -331,17 +491,6 @@ def compute_per_unit_forecast(
     dow_df = compute_dow_patterns(df)
     if dow_df.empty:
         return []
-
-    # Build per-unit DOW medians: {unit_name: {dow_int: median}}
-    unit_dow: dict = {}
-    for _, row in dow_df.iterrows():
-        unit_dow.setdefault(row["unit_name"], {})[int(row["day_of_week"])] = float(row["median_count"])
-
-    # Per-unit trend slopes
-    unit_slopes: dict = {}
-    for unit in unit_dow:
-        trend = compute_unit_trend(df, unit, forecast_months=1)
-        unit_slopes[unit] = trend["trend_slope"] if trend else 0.0
 
     # Build holiday set
     holiday_set = set()
@@ -361,12 +510,45 @@ def compute_per_unit_forecast(
             upcoming.append(d)
         d += timedelta(days=1)
 
+    # Per-unit HW models + fallback data
+    unit_names = df["unit_name"].unique()
+    unit_hw: dict = {}    # {unit: hw_fit or None}
+    unit_last: dict = {}  # {unit: last observed business day Timestamp}
+    unit_dow: dict = {}   # {unit: {dow_int: median}}
+    unit_slopes: dict = {}  # {unit: fallback linear slope}
+
+    for unit in unit_names:
+        unit_rows = dow_df[dow_df["unit_name"] == unit]
+        unit_dow[unit] = dict(zip(
+            unit_rows["day_of_week"].astype(int),
+            unit_rows["median_count"].astype(float),
+        ))
+        trend = compute_unit_trend(df, unit, forecast_months=1)
+        unit_slopes[unit] = trend["trend_slope"] if trend else 0.0
+
+        udf = df[df["unit_name"] == unit].sort_values("date")
+        bday_mask = pd.to_datetime(udf["date"]).dt.dayofweek < 5
+        bdays = udf[bday_mask]
+        if len(bdays) < HW_MIN_PERIODS:
+            unit_hw[unit] = None
+            continue
+        bday_values = bdays["in_office_count"].values.astype(float)
+        hw_fit = _fit_holt_winters(bday_values, HW_SEASONAL_PERIODS)
+        unit_hw[unit] = hw_fit
+        if hw_fit is not None:
+            unit_last[unit] = pd.Timestamp(bdays["date"].iloc[-1])
+
     results = []
     for i, day in enumerate(upcoming):
-        for unit, dow_medians in unit_dow.items():
-            base = dow_medians.get(day.weekday(), 0.0)
-            slope = unit_slopes.get(unit, 0.0)
-            expected = max(0, round(base + slope * (i + 1)))
+        for unit in unit_names:
+            hw_fit = unit_hw.get(unit)
+            if hw_fit is not None and unit in unit_last:
+                steps = _bday_steps_ahead(unit_last[unit], pd.Timestamp(day))
+                expected = max(0, round(float(hw_fit["hw_result"].forecast(steps).iloc[-1])))
+            else:
+                base = unit_dow.get(unit, {}).get(day.weekday(), 0.0)
+                slope = unit_slopes.get(unit, 0.0)
+                expected = max(0, round(base + slope * (i + 1)))
             results.append({
                 "unit_name": unit,
                 "date": day,

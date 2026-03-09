@@ -9,8 +9,17 @@ from data.session_store import (
     get_rule_config, is_data_loaded, get_last_data_edit,
     get_daily_attendance_df,
 )
-from engine.forecasting import compute_week_ahead_forecast
+from engine.forecasting import compute_week_ahead_forecast, compute_dow_patterns
 from components.metrics_cards import render_metric_row
+
+
+@st.cache_data(show_spinner=False)
+def _cached_week_forecast(daily_df, total_capacity):
+    return compute_week_ahead_forecast(daily_df, total_capacity=total_capacity)
+
+@st.cache_data(show_spinner=False)
+def _cached_exec_dow_patterns(daily_df):
+    return compute_dow_patterns(daily_df)
 from components.charts import capacity_vs_demand_bar, utilization_donut, rto_need_vs_allocated_bar
 from engine.spatial import get_floor_utilization
 from engine.allocation_engine import compute_rto_alerts
@@ -230,7 +239,7 @@ def render(sidebar_state):
     # --- 1-Week Seat Forecast ---
     daily_df = get_daily_attendance_df()
     if daily_df is not None and not daily_df.empty:
-        week_fc = compute_week_ahead_forecast(daily_df, total_capacity=effective_total_seats)
+        week_fc = _cached_week_forecast(daily_df, effective_total_seats)
         if week_fc:
             st.subheader("Next 7 Days — Seat Demand Forecast")
             bar_colors = {"HIGH": "#e74c3c", "MEDIUM": "#f39c12", "LOW": "#27ae60"}
@@ -261,11 +270,22 @@ def render(sidebar_state):
             st.caption(
                 f"📅 Peak day: **{peak_day['weekday_name']}** — "
                 f"~{peak_day['expected_seats']:,} seats expected{pct_str}. "
-                "Use for amenity planning: catering, parking, meeting rooms."
+                "Use for amenity planning: catering, parking, meeting rooms. "
+                "For the full 1–4 week tactical view with per-unit breakdown and overflow planning, see **Demand Analytics**."
             )
+
+            # Overflow risk callout — links to the Overflow Planning section in Demand Analytics
+            _overflow_days = [r for r in week_fc if r["capacity_pct"] > 0.90]
+            if _overflow_days:
+                _worst = max(_overflow_days, key=lambda r: r["capacity_pct"])
+                st.warning(
+                    f"**{len(_overflow_days)} day{'s' if len(_overflow_days) != 1 else ''} this week exceed 90% capacity** — "
+                    f"peak: **{_worst['weekday_name']}** at {_worst['capacity_pct']:.0%}. "
+                    "Go to **Demand Analytics → Peak Day Overflow Planning** to see which floors can absorb the overflow."
+                )
+
             with st.expander("Per-unit breakdown →"):
-                from engine.forecasting import compute_dow_patterns
-                unit_dow = compute_dow_patterns(daily_df)
+                unit_dow = _cached_exec_dow_patterns(daily_df)
                 if not unit_dow.empty:
                     rows_fc = []
                     for r in week_fc:

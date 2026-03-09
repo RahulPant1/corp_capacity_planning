@@ -29,11 +29,11 @@ The app opens at `http://localhost:8501`.
 ## Quick Start
 
 1. Open the app and go to the **Admin** tab
-2. Click **"Load Sample Data"** to load pre-built test data (2 buildings, 20 floors, 8 business units)
-3. Go to **Scenario Lab** and click **"Run Simulation"** to compute the baseline allocation
-4. Explore results across all tabs
-5. *(Optional)* Go to **Demand Forecasting** → click **"Generate Sample Data"** → explore attendance trends, probabilistic demand, and day-of-week patterns
-6. *(Optional)* Go to **What-If Analysis** → expand **"Scenario Comparison Matrix"** → auto-run multiple scenarios and pick the best
+2. Click **"Load Sample Data"** — a step-by-step progress panel loads 2 buildings, 20 floors, 8 business units, 90 days of attendance history, and pre-warms all tabs in one click
+3. Go to **What-If Analysis** and click **"Run Policy Simulation"** to compute the baseline allocation
+4. Explore results across all tabs — Executive Dashboard, Spatial/Floor View, Unit Impact View are all immediately populated
+5. Go to **Demand Analytics** to explore Holt-Winters trend forecasts, short-term seat demand, DOW patterns, and the demand report download
+6. *(Optional)* Go to **What-If Analysis** → expand **"Scenario Comparison Matrix"** → auto-run up to 24 scenario combinations and adopt the best
 
 ---
 
@@ -287,34 +287,54 @@ Irrelevant sliders are **greyed out** based on the selected mode with a contextu
 4. Same building
 5. Cross-building — only when genuinely necessary; flagged with a warning
 
-### Tab 6: Demand Forecasting
+### Tab 6: Demand Forecasting (📈 Demand Analytics)
 
-Data-driven forecasting from **daily attendance data** (CSV: Date, Unit Name, In-Office Count). Upload your own or click **"Generate Sample Data"** for an instant 90-day demo.
+Data-driven forecasting from **daily attendance data** (CSV: Date, Unit Name, In-Office Count). Upload your own or use **"Load Sample Data"** in Admin for an instant 90-day demo (all tabs ready in one click).
 
 **Attendance Trends & Forecast:**
 - Unit selector (default: All Units combined) + forecast horizon slider (1–12 months)
-- Line chart: historical scatter + 21-day EMA + linear trend forecast + 95% confidence band
-- Metrics: Current Median, Trend Slope (people/day), Residual Std, Suggested Growth %
-- *How is this forecast projected?* expander with full methodology explanation
+- Line chart: historical scatter + 21-day EMA + Holt-Winters forecast curve + widening 95% confidence band
+- **5 metric cards:** Current Median, Trend Slope (people/day), Residual Std, 6M Forecast, Model badge (Holt-Winters / Linear Reg.) + MAPE
+- *How is this forecast projected?* expander — conditional text describing the active model
+- **Model selection:** Holt-Winters Additive ETS (trend + damped growth + Mon–Fri weekly seasonality) used automatically when ≥ 12 weekday observations and < 20% data gaps exist; falls back to linear regression + EMA for sparse datasets
 
 **Forecast Summary (All Units):**
-- Table: Unit | Current Median/Peak | Forecasted Median/Peak | Suggested Growth %
-- **"Apply Forecasted Growth to Active Scenario"** — pushes data-driven growth % into Scenario Lab unit overrides; re-run simulation to see updated demand
+- Table: Unit | Current Median | Current Peak | Forecast Median (6m) | 6M Change (seats) | 6M Change % | Trend (↑ Growing / → Stable / ↓ Declining)
+- 6M Change % bounded ±100%; Forecast Median = end-of-period projected value, floored at 0
+- **"Apply 6-Month Growth Estimate"** — pushes data-driven growth % into scenario unit overrides
+
+**Short-Term Seat Demand Forecast:**
+- Horizon options: 5 / 10 / 15 / 21 business days ("How many seats will we need?")
+- Per-unit Holt-Winters ETS models; fallback to DOW median + slope per unit
+- Holiday exclusion — configured dates automatically skipped
+- Capacity risk threshold: alert when any day exceeds 90% capacity
+- Color-coded bar chart: green (safe) / amber (moderate) / red (> threshold)
+- **Per-unit breakdown** toggle — drill into which teams drive demand on each day
+
+**Peak Day Overflow Planning** *(auto-shown when alert days exist):*
+- Capacity risk days table with expected seats vs capacity
+- Available overflow floors (spare seats by floor)
+- Units with seat shortfall — targeted flex coordination guide
 
 **Probabilistic Seat Demand:**
 - Confidence slider: 90% / 95% / 99%
-- Grouped bar: Peak vs Percentile demand per unit
-- Metrics: Total Peak-Based Demand, Total Percentile Demand, Potential Savings
-- Detail table with Bootstrap Monte Carlo confidence intervals per unit
+- Grouped bar: Peak vs Percentile demand per unit; Bootstrap Monte Carlo CIs
 
 **Day-of-Week Patterns:**
 - Heatmap: units × Mon–Fri, colored by median in-office count
-- Reveals peak days (Tue/Wed) vs low-attendance days suitable for hot-desking
 
-**Advanced Insights** (3 sub-tabs):
-- **Demand Correlation** — Pearson correlation heatmap; high positive = units compete for seats on same days
-- **Capacity Breach Risk** — P(daily attendance > allocated seats) per unit; requires simulation to have been run; shows expected breach days/month and avg magnitude
-- **Temporal Clusters** — groups units by similar attendance behavior (correlation > 0.7) for hot-desking opportunities
+**Peak Day Load Balancing Advisory** *(auto-expands when overloaded days detected):*
+- Company-wide load bar chart by weekday; overloaded days in red
+- Per-unit peak day table; cross-unit conflict detection
+- Stagger suggestions: which units to shift and to which lighter day
+
+**Advanced Insights** (2 sub-tabs):
+- **Capacity Breach Risk** — risk-tiered table (🔴/🟡/🟢) with P(breach), expected breach days/month, seats to add, recommended action
+- **Temporal Clusters** — groups units by attendance correlation > 0.7; plain-language cluster advisory + "Apply Cluster-Diverse Placement" button
+
+**Report Download:**
+- **Excel (.xlsx)** — 8 sheets: Executive Summary, Forecast Summary, Short-Term Forecast, DOW Patterns, Capacity Breach Risk, Load Balancing, Overflow Planning (conditional), Temporal Clusters
+- **PDF (.pdf)** — matching 8-page PDF with KPI header, risk-colored tables, and recommended-action column on every sheet
 
 ### Tab 7: Admin
 
@@ -423,20 +443,21 @@ Five analytical AI features are built into the platform — no external API or i
 
 ---
 
-### 4. Demand Forecasting *(Demand Forecasting tab)*
+### 4. Demand Forecasting *(Demand Analytics tab)*
 
 **What it does:** Converts daily attendance records into statistical forecasts, probabilistic seat demand, and temporal patterns. Replaces manual growth % guesses with data-driven projections.
 
 **Features:**
-- **Trend Analysis** — linear regression + 21-day EMA on daily data → forecasted median/peak + 95% CI band + suggested annual growth %
-- **Probabilistic Demand** — 90th/95th/99th percentile demand from historical distribution → shows how many seats can be saved vs. always planning for the peak
+- **Holt-Winters ETS Trend Forecast** — Triple exponential smoothing (level + trend + Mon–Fri weekly seasonality, damped) on business-day-aligned data → wavy seasonal forecast curve + widening 95% PI; MAPE reported for model accuracy. Automatically falls back to linear regression + 21-day EMA for sparse/weekend-heavy data.
+- **Short-Term Forecast (5–21 days)** — Per-unit HW models summed for aggregate seat demand; holiday-aware; per-unit breakdown toggle; capacity risk threshold alerts
+- **Probabilistic Demand** — 90th/95th/99th percentile demand from historical distribution → quantifies seat savings vs. peak-based planning
 - **Bootstrap Confidence Intervals** — 1000-resample Monte Carlo CI on percentile estimates
 - **Day-of-Week Patterns** — median attendance by weekday per unit (reveals Tue/Wed peaks)
-- **Demand Correlation** — Pearson correlation between units (who peaks together, who is a desk-sharing candidate)
-- **Capacity Breach Probability** — `P(daily_attendance > allocated_seats)` from historical data
-- **Temporal Clustering** — groups units by similar attendance behavior (correlation > 0.7)
+- **Capacity Breach Risk** — tiered risk table with `P(daily_attendance > allocated_seats)`, expected breach days/month, seats to add
+- **Temporal Clustering** — groups units by attendance correlation > 0.7; drives cluster-diverse floor placement
+- **Demand Analytics Report** — full Excel + PDF download with 8 sheets/pages and actionable recommended actions per insight
 
-**Integration:** "Apply Forecasted Growth" writes data-driven growth % into Scenario Lab unit overrides. Re-run simulation to see updated demand.
+**Integration:** "Apply 6-Month Growth Estimate" writes data-driven growth % into scenario unit overrides. Re-run simulation to see updated demand.
 
 ---
 
@@ -489,6 +510,8 @@ FORECAST_DEFAULT_MONTHS = 6
 FORECAST_CONFIDENCE_LEVELS = [0.90, 0.95, 0.99]
 FORECAST_BOOTSTRAP_SAMPLES = 1000
 FORECAST_EMA_SPAN = 21
+HW_MIN_PERIODS = 12        # Min observations to attempt Holt-Winters fit
+HW_SEASONAL_PERIODS = 5    # Business week (Mon-Fri)
 
 # Scenario Comparison Matrix
 COMPARISON_MAX_COMBINATIONS = 24
@@ -518,10 +541,12 @@ cpg_planning_tool/
 │   ├── explainer.py             # Human-readable allocation explanation steps
 │   ├── sensitivity.py           # AI: one-at-a-time parameter sensitivity analysis
 │   ├── anomaly.py               # AI: z-score attendance anomaly detection
-│   ├── forecasting.py           # AI: demand forecasting (trend, EMA, bootstrap CI, clustering)
+│   ├── forecasting.py           # AI: demand forecasting (Holt-Winters ETS, EMA, bootstrap CI, clustering)
 │   ├── scenario_comparison.py   # AI: batch scenario matrix runner + composite ranking
-│   ├── report_generator.py      # Excel report export
-│   └── pdf_report_generator.py  # PDF boardroom report (reportlab)
+│   ├── report_generator.py      # Excel report export (What-If Analysis)
+│   ├── pdf_report_generator.py  # PDF boardroom report (What-If Analysis)
+│   ├── demand_report_generator.py    # Excel demand analytics report (8 sheets)
+│   └── demand_pdf_report_generator.py # PDF demand analytics report (8 pages)
 ├── tabs/                        # All 7 UI tabs
 │   ├── tab_executive_dashboard.py
 │   ├── tab_unit_impact.py

@@ -111,52 +111,51 @@ def _load_and_validate(buildings_df, units_df, attendance_df):
 
 def _load_full_sample():
     """Load sample data + daily attendance + run policy simulation for a complete demo setup."""
-    success = _load_and_validate(generate_buildings_df(), generate_units_df(), generate_attendance_df())
-    if not success:
-        return
+    with st.status("Loading demo data…", expanded=True) as _status:
+        st.write("Generating buildings, units & attendance profiles…")
+        success = _load_and_validate(generate_buildings_df(), generate_units_df(), generate_attendance_df())
+        if not success:
+            _status.update(label="Load failed — validation errors above.", state="error")
+            return
 
-    try:
-        from data.sample_data import generate_daily_attendance_df
-        from data.loader import parse_daily_attendance
-        from engine.scenario_engine import run_scenario
-        from engine.forecasting import compute_temporal_clustering
+        try:
+            from data.sample_data import generate_daily_attendance_df
+            from data.loader import parse_daily_attendance
+            from engine.scenario_engine import run_scenario
+            from engine.forecasting import compute_temporal_clustering
 
-        # Generate and store daily attendance (90 days synthetic data)
-        _sample_daily = generate_daily_attendance_df()
-        _daily_records = parse_daily_attendance(_sample_daily)
-        _daily_df = pd.DataFrame([
-            {"date": r.date, "unit_name": r.unit_name, "in_office_count": r.in_office_count}
-            for r in _daily_records
-        ])
-        _daily_df["date"] = pd.to_datetime(_daily_df["date"])
-        set_daily_attendance(_daily_records, _daily_df)
+            st.write("Generating 90-day daily attendance history…")
+            _sample_daily = generate_daily_attendance_df()
+            _daily_records = parse_daily_attendance(_sample_daily)
+            _daily_df = pd.DataFrame([
+                {"date": r.date, "unit_name": r.unit_name, "in_office_count": r.in_office_count}
+                for r in _daily_records
+            ])
+            _daily_df["date"] = pd.to_datetime(_daily_df["date"])
+            set_daily_attendance(_daily_records, _daily_df)
 
-        # Run policy simulation so allocation_results + floor_assignments are populated
-        _units_list = get_units()
-        _att_map = {a.unit_name: a for a in get_attendance()}
-        _scen = get_active_scenario()
-        _scen = run_scenario(_scen, _units_list, _att_map, get_floors(), get_rule_config())
-        update_scenario(_scen)
+            st.write("Running policy simulation…")
+            _units_list = get_units()
+            _att_map = {a.unit_name: a for a in get_attendance()}
+            _scen = get_active_scenario()
+            _scen = run_scenario(_scen, _units_list, _att_map, get_floors(), get_rule_config())
+            update_scenario(_scen)
 
-        # Pre-compute cluster map so What-If cluster toggle is immediately available
-        _unit_names = [u.unit_name for u in _units_list]
-        _clusters = compute_temporal_clustering(_daily_df, _unit_names)
-        if _clusters:
-            st.session_state["unit_cluster_map"] = {r["unit_name"]: r["cluster_id"] for r in _clusters}
+            st.write("Computing attendance clusters & configuring holidays…")
+            _unit_names = [u.unit_name for u in _units_list]
+            _clusters = compute_temporal_clustering(_daily_df, _unit_names)
+            if _clusters:
+                st.session_state["unit_cluster_map"] = {r["unit_name"]: r["cluster_id"] for r in _clusters}
 
-        # Push sample holiday dates into rule_config for short-term forecast holiday exclusion
-        from data.sample_data import get_sample_holiday_dates
-        _rc = get_rule_config()
-        _rc["holiday_dates"] = get_sample_holiday_dates()
-        set_rule_config(_rc)
+            from data.sample_data import get_sample_holiday_dates
+            _rc = get_rule_config()
+            _rc["holiday_dates"] = get_sample_holiday_dates()
+            set_rule_config(_rc)
 
-        st.info(
-            "**All tabs pre-loaded for demo:** 90 days of attendance data loaded · "
-            "Policy simulation run · Attendance clusters computed · Holiday dates configured. "
-            "Demand Analytics, Floor Plan Sandbox, and What-If Analysis are all ready."
-        )
-    except Exception as e:
-        st.warning(f"Base data loaded but demo pre-setup partially failed: {e}")
+            _status.update(label="Demo data loaded — all tabs ready!", state="complete", expanded=False)
+        except Exception as e:
+            _status.update(label=f"Partially loaded — {e}", state="error")
+            st.warning(f"Base data loaded but demo pre-setup partially failed: {e}")
 
 
 def render(sidebar_state):

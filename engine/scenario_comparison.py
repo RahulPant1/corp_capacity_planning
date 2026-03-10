@@ -46,11 +46,12 @@ def run_scenario_matrix(
         idx += 1
         rc = dict(rule_config)
         # RTO-Based mode ignores alloc% — mark as N/A
-        if objective != "rto_based":
+        # alloc=None means "Vary Alloc %" was not checked — keep rule_config value, show N/A
+        if objective != "rto_based" and alloc is not None:
             rc["global_alloc_pct"] = alloc
             effective_alloc = alloc
         else:
-            effective_alloc = None  # attendance-driven
+            effective_alloc = None  # attendance-driven or not varied
 
         rto_mandate_val = rto if objective == "optimal_placement" else None
         target_rto_val  = rto if objective == "rto_whatif" else None

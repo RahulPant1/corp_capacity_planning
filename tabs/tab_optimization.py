@@ -871,7 +871,7 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
                     key="cmp_alloc_vals",
                 )
             else:
-                cmp_alloc_vals = [rule_config_wi.get("global_alloc_pct", 0.80)]
+                cmp_alloc_vals = [None]  # sentinel: don't override alloc%, show N/A in results
 
             use_rto = st.checkbox("Vary RTO Mandate", value=False, key="cmp_use_rto")
             if use_rto:
@@ -915,7 +915,7 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
                 cmp_obj_vals = ["optimal_placement"]
 
         # Guard: non-empty selections
-        cmp_alloc_vals = cmp_alloc_vals or [rule_config_wi.get("global_alloc_pct", 0.80)]
+        cmp_alloc_vals = cmp_alloc_vals if cmp_alloc_vals is not None else [None]
         cmp_rto_vals   = cmp_rto_vals   or [float(scenario.params.global_rto_mandate_days or 3.0)]
         cmp_capred_vals = cmp_capred_vals or [0.0]
         cmp_obj_vals   = cmp_obj_vals   or ["optimal_placement"]

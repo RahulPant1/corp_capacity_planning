@@ -453,25 +453,39 @@ def _page_stf_risk(story, scenario, stf_results, alert_days, breach_data, has_da
     supply_total = sum(a.allocated_seats for a in allocs)
     risk_days = len(alert_days) if alert_days else 0
 
+    # Aggregate per-unit per-day stf_results to daily totals
+    from config.defaults import FORECAST_CAPACITY_ALERT_THRESHOLD
+    daily_agg: dict = {}
+    for r in (stf_results or []):
+        date_key = str(r.get("date", ""))[:10]
+        if date_key not in daily_agg:
+            daily_agg[date_key] = {"weekday_name": r.get("weekday_name", ""), "expected_seats": 0}
+        daily_agg[date_key]["expected_seats"] += r.get("expected_seats", 0)
+
+    n_days = len(daily_agg)
+    alert_day_count = sum(
+        1 for v in daily_agg.values()
+        if supply_total > 0 and v["expected_seats"] / supply_total > FORECAST_CAPACITY_ALERT_THRESHOLD
+    )
+
     story.append(Paragraph(
-        f"The next <b>{len(set(r.get('date') for r in stf_results)) if stf_results else 0} business days</b> "
-        f"are forecast below. <b>{risk_days} day(s)</b> exceed 90% of total allocated capacity "
+        f"The next <b>{n_days} business days</b> "
+        f"are forecast below. <b>{alert_day_count} day(s)</b> exceed 90% of total allocated capacity "
         f"({supply_total:,} seats).",
         body,
     ))
     story.append(Spacer(1, 0.2 * cm))
 
-    # STF table (compact — max 15 rows)
-    if stf_results:
+    # STF table (compact — max 15 rows, one row per day)
+    if daily_agg:
         stf_header = ["Date", "Day", "Expected Seats", "Capacity %", "Alert"]
         stf_rows = []
-        from config.defaults import FORECAST_CAPACITY_ALERT_THRESHOLD
-        for r in stf_results[:15]:
-            expected = r.get("expected_seats", 0)
+        for date_key in sorted(daily_agg):
+            expected = daily_agg[date_key]["expected_seats"]
             cap_pct = expected / supply_total if supply_total > 0 else 0
             stf_rows.append([
-                str(r.get("date", ""))[:10],
-                r.get("weekday_name", ""),
+                date_key,
+                daily_agg[date_key]["weekday_name"],
                 str(expected),
                 f"{cap_pct:.0%}",
                 "⚠ Over 90%" if cap_pct > FORECAST_CAPACITY_ALERT_THRESHOLD else "",

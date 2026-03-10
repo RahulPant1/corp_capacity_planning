@@ -457,15 +457,22 @@ def _write_stf_and_breach(writer, scenario, stf_results, alert_days, breach_data
                   note_if_empty="Load daily attendance data in Admin tab to enable this section.")
         return
 
-    # Part 1: Daily STF forecast
+    # Part 1: Daily STF forecast — aggregate per-unit rows to daily totals
     stf_rows = []
     supply_total = sum(a.allocated_seats for a in (scenario.allocation_results or []))
+    # stf_results is per-unit per-day; aggregate to daily totals first
+    daily_agg: dict = {}
     for r in (stf_results or []):
-        expected = r.get("expected_seats", 0)
+        date_key = str(r.get("date", ""))[:10]
+        if date_key not in daily_agg:
+            daily_agg[date_key] = {"weekday_name": r.get("weekday_name", ""), "expected_seats": 0}
+        daily_agg[date_key]["expected_seats"] += r.get("expected_seats", 0)
+    for date_key in sorted(daily_agg):
+        expected = daily_agg[date_key]["expected_seats"]
         cap_pct = expected / supply_total if supply_total > 0 else 0
         stf_rows.append({
-            "Date": r.get("date", ""),
-            "Day": r.get("weekday_name", ""),
+            "Date": date_key,
+            "Day": daily_agg[date_key]["weekday_name"],
             "Expected Seats": expected,
             "Allocated Capacity": supply_total,
             "Capacity %": f"{cap_pct:.0%}",

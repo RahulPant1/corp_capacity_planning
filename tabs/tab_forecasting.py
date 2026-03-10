@@ -445,13 +445,7 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
 
     # ── Section 4: Probabilistic Demand ────────────────────────────────────
     st.divider()
-    st.subheader("Probabilistic Seat Demand")
-    st.caption(
-        "How many seats does your **attendance history** suggest at a given confidence level? "
-        "This is a *descriptive* view — no growth, RTO policy, or floor constraints applied. "
-        "Compare against your **scenario allocation** (prescriptive: includes policy, RTO factor, "
-        "growth assumptions, and floor constraints) to spot over- or under-allocation."
-    )
+    st.subheader("Seat Demand vs Scenario Allocation")
 
     confidence = st.select_slider(
         "Confidence Level",
@@ -461,6 +455,26 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
         key="confidence_slider",
     )
 
+    # Fetch current allocation from active scenario (must be before chart)
+    alloc_map = {}
+    _scen = None
+    if is_data_loaded():
+        _scen = get_active_scenario()
+        if _scen and _scen.allocation_results:
+            alloc_map = {a.unit_name: a.allocated_seats for a in _scen.allocation_results}
+
+    _scen_label = f"**{_scen.name}**" if _scen else "active scenario"
+    st.caption(
+        f"Three-way comparison: **Peak** (highest observed day), "
+        f"**{confidence:.0%} Confidence** (percentile from attendance history — descriptive, no growth/RTO applied), "
+        f"and **Scenario Allocation** ({_scen_label} — includes policy, RTO mandate, growth). "
+        "Gaps between bars reveal over- or under-allocation."
+        if alloc_map else
+        "Two-way comparison: **Peak** (highest observed day) vs "
+        f"**{confidence:.0%} Confidence** (percentile from attendance history). "
+        "Run a Policy Simulation in What-If Analysis to add the Scenario Allocation bar."
+    )
+
     demand_data = []
     for name in unit_names:
         result = _cached_percentile_demand(daily_df, name)
@@ -468,25 +482,27 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
             demand_data.append(result)
 
     if demand_data:
-        fig = probabilistic_demand_bar(demand_data, confidence)
+        fig = probabilistic_demand_bar(demand_data, confidence, alloc_map=alloc_map or None)
         st.plotly_chart(fig, use_container_width=True, key="prob_demand_chart")
 
         total_peak = sum(d["peak"] for d in demand_data)
         total_percentile = sum(d["percentiles"][confidence] for d in demand_data)
         total_savings = total_peak - total_percentile
 
-        pc1, pc2, pc3 = st.columns(3)
-        pc1.metric("Total Peak-Based Demand", f"{total_peak:,}")
-        pc2.metric(f"Total {confidence:.0%} Demand", f"{total_percentile:,}")
-        pc3.metric("Potential Savings", f"{total_savings:,} seats",
-                   delta=f"-{total_savings}", delta_color="inverse")
-
-        # Fetch current allocation from active scenario (if available)
-        alloc_map = {}
-        if is_data_loaded():
-            _scen = get_active_scenario()
-            if _scen and _scen.allocation_results:
-                alloc_map = {a.unit_name: a.allocated_seats for a in _scen.allocation_results}
+        if alloc_map:
+            total_alloc = sum(alloc_map.get(d["unit_name"], 0) for d in demand_data)
+            pc1, pc2, pc3, pc4 = st.columns(4)
+            pc1.metric("Total Peak", f"{total_peak:,}")
+            pc2.metric(f"Total {confidence:.0%} Confidence", f"{total_percentile:,}")
+            pc3.metric("Scenario Allocation", f"{total_alloc:,}")
+            pc4.metric("Peak vs Confidence Savings", f"{total_savings:,}",
+                       delta=f"-{total_savings}", delta_color="inverse")
+        else:
+            pc1, pc2, pc3 = st.columns(3)
+            pc1.metric("Total Peak", f"{total_peak:,}")
+            pc2.metric(f"Total {confidence:.0%} Confidence", f"{total_percentile:,}")
+            pc3.metric("Potential Savings", f"{total_savings:,} seats",
+                       delta=f"-{total_savings}", delta_color="inverse")
 
         # Detail table with bootstrap CI + scenario allocation comparison
         detail_rows = []
@@ -498,8 +514,8 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
                 "Unit": d["unit_name"],
                 "Median": d["median"],
                 "Peak": d["peak"],
-                f"{confidence:.0%} Percentile": pct_val,
-                "Current Allocation": current_alloc if current_alloc is not None else "—",
+                f"{confidence:.0%} Confidence": pct_val,
+                "Scenario Allocation": current_alloc if current_alloc is not None else "—",
                 "vs Allocation": (
                     f"{current_alloc - pct_val:+,}" if current_alloc is not None else "—"
                 ),
@@ -509,10 +525,9 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
             })
         st.dataframe(pd.DataFrame(detail_rows), use_container_width=True, hide_index=True)
         if alloc_map:
-            _scen_label = f"**{_scen.name}**" if _scen else "active scenario"
             st.caption(
-                f"**Allocation column** uses the {_scen_label} seat assignment. "
-                "**vs Allocation**: positive = scenario assigns more seats than percentile demand "
+                f"**Scenario Allocation** uses {_scen_label}. "
+                "**vs Allocation**: positive = scenario assigns more seats than confidence demand "
                 "(possible right-sizing opportunity) · "
                 "negative = scenario assigns fewer seats (potential overflow risk)."
             )

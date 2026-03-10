@@ -267,23 +267,33 @@ def dow_heatmap_chart(
 def probabilistic_demand_bar(
     demand_data: List[dict],
     selected_confidence: float = 0.95,
+    alloc_map: dict = None,
 ) -> go.Figure:
-    """Grouped bar: peak vs percentile-based demand per unit."""
+    """Grouped bar: peak vs percentile-based demand vs scenario allocation per unit."""
     units = [d["unit_name"] for d in demand_data]
     peaks = [d["peak"] for d in demand_data]
     percentile_vals = [d["percentiles"][selected_confidence] for d in demand_data]
 
     fig = go.Figure()
-    fig.add_trace(go.Bar(name="Peak-Based", x=units, y=peaks, marker_color="#E8734A"))
+    fig.add_trace(go.Bar(name="Peak", x=units, y=peaks, marker_color="#E8734A"))
     fig.add_trace(go.Bar(
-        name=f"{selected_confidence:.0%} Percentile",
+        name=f"{selected_confidence:.0%} Confidence",
         x=units, y=percentile_vals, marker_color="#4A90D9",
     ))
+    if alloc_map:
+        alloc_vals = [alloc_map.get(u, 0) for u in units]
+        fig.add_trace(go.Bar(
+            name="Scenario Allocation",
+            x=units, y=alloc_vals, marker_color="#2ECC71",
+        ))
 
+    title = f"Peak · {selected_confidence:.0%} Confidence"
+    if alloc_map:
+        title += " · Scenario Allocation"
     fig.update_layout(
         barmode="group",
-        title=f"Peak vs {selected_confidence:.0%} Percentile Demand",
-        xaxis_title="Unit", yaxis_title="Seats Needed",
+        title=title,
+        xaxis_title="Unit", yaxis_title="Seats",
         height=400,
     )
     return fig

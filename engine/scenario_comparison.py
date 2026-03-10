@@ -117,6 +117,12 @@ def run_scenario_matrix(
             opt_assignments = []
             opt_unit_allocations = {}
 
+        # RTO binding: True if any unit's base attendance is below the mandate
+        # (meaning the mandate actually raises their demand floor)
+        rto_binding = bool(rto and any(
+            att.avg_rto_days_per_week < rto for att in attendance_map.values()
+        ))
+
         results.append({
             "idx": idx,
             # Parameters
@@ -136,6 +142,8 @@ def run_scenario_matrix(
             "floors_used": floors_used,
             "seats_saved": seats_saved,
             "opt_status": opt_status,
+            # Parameter semantics
+            "rto_binding": rto_binding,
             # For adoption
             "_assignments": opt_assignments,
             "_unit_allocations": opt_unit_allocations,

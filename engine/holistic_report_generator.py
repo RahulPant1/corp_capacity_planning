@@ -145,6 +145,25 @@ def _write_cover(writer, scenario, floors, units, rule_config, has_daily):
     meta.alignment = _center()
     ws.row_dimensions[4].height = 22
 
+    # Optimizer constraints band (row 5)
+    _obj_lbl_c = {"optimal_placement": "Optimal Placement", "rto_based": "RTO-Based", "rto_whatif": "What-If RTO"}
+    _cparts = []
+    if scenario.params.optimizer_objective:
+        _cparts.append(f"Mode: {_obj_lbl_c.get(scenario.params.optimizer_objective, scenario.params.optimizer_objective)}")
+    if scenario.params.max_floors_per_unit:
+        _cparts.append(f"Max {scenario.params.max_floors_per_unit} floors/unit")
+    if scenario.params.capacity_reduction_pct:
+        _cparts.append(f"Capacity −{scenario.params.capacity_reduction_pct:.0%}")
+    if scenario.params.pinned_tower_ids:
+        _cparts.append(f"Tower restrictions: {len(scenario.params.pinned_tower_ids)} unit(s)")
+    ws.merge_cells("A5:F5")
+    constraint_cell = ws["A5"]
+    constraint_cell.value = ("⚙  Optimizer constraints: " + "  ·  ".join(_cparts)) if _cparts else "⚙  No optimizer constraints — Policy Simulation only"
+    constraint_cell.fill = _fill(TEAL)
+    constraint_cell.font = Font(bold=False, color="FFFFFF", size=10)
+    constraint_cell.alignment = _center()
+    ws.row_dimensions[5].height = 16
+
     # About section
     about_rows = [
         (6, "About This Report"),
@@ -253,6 +272,7 @@ def _write_executive_summary(writer, scenario, floors, units, rule_config,
     cluster_count = len(set(c.get("cluster_id") for c in (clusters or [])))
     overloaded_days = (conflict or {}).get("overloaded_days", [])
 
+    _obj_lbl = {"optimal_placement": "Optimal Placement", "rto_based": "RTO-Based", "rto_whatif": "What-If RTO"}
     rows = [
         ["─── Scenario Context ───", ""],
         ["Active Scenario", scenario.name],
@@ -261,6 +281,12 @@ def _write_executive_summary(writer, scenario, floors, units, rule_config,
         ["RTO Mandate", f"{scenario.params.global_rto_mandate_days}d / week" if scenario.params.global_rto_mandate_days else "None (attendance-based)"],
         ["Last Simulation Run", scenario.last_run_at.strftime("%Y-%m-%d %H:%M") if scenario.last_run_at else "Not run"],
         ["Report Generated", datetime.now().strftime("%Y-%m-%d %H:%M")],
+        ["", ""],
+        ["─── Optimizer Constraints Applied ───", ""],
+        ["Optimizer Mode", _obj_lbl.get(scenario.params.optimizer_objective, "—") if scenario.params.optimizer_objective else "Policy Simulation (no optimizer)"],
+        ["Max Floors per Unit", scenario.params.max_floors_per_unit if scenario.params.max_floors_per_unit else "No limit"],
+        ["Floor Capacity Reduction", f"{scenario.params.capacity_reduction_pct:.0%}" if scenario.params.capacity_reduction_pct else "None"],
+        ["Tower Restrictions", f"{len(scenario.params.pinned_tower_ids)} unit(s)" if scenario.params.pinned_tower_ids else "None"],
         ["", ""],
         ["─── Capacity & Allocation ───", ""],
         ["Total Seat Supply", f"{supply:,}"],
@@ -793,6 +819,7 @@ def _write_scenario_comparison(writer, matrix_results):
             "Rank": r.get("rank", "—"),
             "Mode": obj_labels.get(r.get("objective", ""), r.get("objective", "—")),
             "RTO (d/wk)": r.get("rto_mandate", "—"),
+            "RTO Active?": "Yes" if r.get("rto_binding") else "No",
             "Alloc %": f"{r['alloc_pct']:.0%}" if r.get("alloc_pct") is not None else "N/A",
             "Demand": r.get("demand", "—"),
             "Capacity": r.get("capacity", "—"),
@@ -803,9 +830,31 @@ def _write_scenario_comparison(writer, matrix_results):
             "Composite Score": f"{r.get('composite_score', 0):.3f}",
         })
 
+    # Prepend parameter-semantics notes before the data table
+    note_rows = [
+        {"Note": "Capacity Reduction affects physical seat SUPPLY (floor capacity × (1 − cap_red)). "
+                 "RTO Mandate affects attendance-based DEMAND. They are independent — both apply when non-zero."},
+        {"Note": "RTO-Based mode ignores Alloc % — those cells show N/A. "
+                 "If RTO mandate ≤ base attendance for all units, demand is unchanged despite varying the mandate "
+                 "(see 'RTO Active?' column: No = mandate was non-binding)."},
+    ]
+    pd.DataFrame(note_rows).to_excel(writer, sheet_name="Scenario Comparison", index=False, startrow=0)
+
     df = pd.DataFrame(rows)
-    _write_df(writer, "Scenario Comparison", df, color_col="Rank",
-              color_fn=lambda v: _fill(GREEN_F) if str(v) == "1" else _fill(GREY_F))
+    df.to_excel(writer, sheet_name="Scenario Comparison", index=False, startrow=4)
+    ws = writer.sheets["Scenario Comparison"]
+    # Style the data header row (row 5) with navy formatting
+    for cell in ws[5]:
+        cell.fill = _fill(NAVY)
+        cell.font = _font(bold=True, color="FFFFFF", size=10)
+        cell.alignment = _center()
+    if "Rank" in df.columns:
+        col_idx = list(df.columns).index("Rank") + 1
+        for row_idx, val in enumerate(df["Rank"], start=6):
+            ws.cell(row=row_idx, column=col_idx).fill = (
+                _fill(GREEN_F) if str(val) == "1" else _fill(GREY_F)
+            )
+    _autofit(ws)
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────

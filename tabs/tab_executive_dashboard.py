@@ -198,6 +198,21 @@ def render(sidebar_state):
         f"Last run: {scenario.last_run_at.strftime('%b %d, %H:%M') if scenario.last_run_at else 'Not yet run'}"
     )
 
+    # Optimizer constraints badge (when Accept & Apply has been used)
+    _p = scenario.params
+    _obj_labels = {"optimal_placement": "Optimal Placement", "rto_based": "RTO-Based", "rto_whatif": "What-If RTO"}
+    _constraint_parts = []
+    if _p.optimizer_objective:
+        _constraint_parts.append(f"Mode: **{_obj_labels.get(_p.optimizer_objective, _p.optimizer_objective)}**")
+    if _p.max_floors_per_unit:
+        _constraint_parts.append(f"Max {_p.max_floors_per_unit} floor(s)/unit")
+    if _p.capacity_reduction_pct:
+        _constraint_parts.append(f"Capacity −{_p.capacity_reduction_pct:.0%}")
+    if _p.pinned_tower_ids:
+        _constraint_parts.append(f"Tower restrictions: {len(_p.pinned_tower_ids)} unit(s)")
+    if _constraint_parts:
+        st.caption("⚙️ Optimization constraints applied: " + " · ".join(_constraint_parts))
+
     # Scenario adjustment info
     if has_scenario_adjustments:
         notes = []

@@ -88,6 +88,12 @@ def _write_summary(writer, scenario: Scenario, floors: List[Floor], config: dict
         ["Excluded Floors", ", ".join(scenario.params.excluded_floors) if scenario.params.excluded_floors else "None"],
         ["Unit Overrides Applied", len(scenario.unit_overrides)],
         ["", ""],
+        ["--- Optimizer Constraints ---", ""],
+        ["Optimizer Mode", {"optimal_placement": "Optimal Placement", "rto_based": "RTO-Based", "rto_whatif": "What-If RTO"}.get(scenario.params.optimizer_objective, "—") if scenario.params.optimizer_objective else "Policy Simulation (no optimizer)"],
+        ["Max Floors per Unit", scenario.params.max_floors_per_unit if scenario.params.max_floors_per_unit else "No limit"],
+        ["Floor Capacity Reduction", f"{scenario.params.capacity_reduction_pct:.0%}" if scenario.params.capacity_reduction_pct else "None"],
+        ["Tower Restrictions", f"{len(scenario.params.pinned_tower_ids)} unit(s)" if scenario.params.pinned_tower_ids else "None"],
+        ["", ""],
         ["--- Rule Configuration ---", ""],
         ["Global Seat Allocation %", f"{config.get('global_alloc_pct', 0.80):.0%}"],
         ["Min Allocation %", f"{config.get('min_alloc_pct', 0.20):.0%}"],
@@ -316,6 +322,7 @@ def _write_scenario_comparison(writer, matrix_results: list):
             "Rank": r.get("rank", "—"),
             "Alloc %": f"{r['alloc_pct']:.0%}" if r.get("alloc_pct") is not None else "N/A",
             "RTO (days/wk)": r.get("rto_mandate", "—"),
+            "RTO Active?": "Yes" if r.get("rto_binding") else "No",
             "Capacity Reduction": f"{r.get('cap_red', 0):.0%}",
             "Mode": obj_labels.get(r.get("objective", ""), r.get("objective", "—")),
             "Demand (seats)": r.get("demand", "—"),
@@ -332,7 +339,16 @@ def _write_scenario_comparison(writer, matrix_results: list):
         })
 
     if rows:
-        pd.DataFrame(rows).to_excel(writer, sheet_name="Scenario Comparison", index=False)
+        # Prepend parameter-semantics notes before the data table
+        note_rows = [
+            {"Note": "Capacity Reduction affects physical seat SUPPLY (floor capacity × (1 − cap_red)). "
+                     "RTO Mandate affects attendance-based DEMAND. They are independent — both apply when non-zero."},
+            {"Note": "RTO-Based mode ignores Alloc % — those cells show N/A. "
+                     "If RTO mandate ≤ base attendance for all units, demand is unchanged despite varying the mandate "
+                     "(see 'RTO Active?' column: No = mandate was non-binding)."},
+        ]
+        pd.DataFrame(note_rows).to_excel(writer, sheet_name="Scenario Comparison", index=False, startrow=0)
+        pd.DataFrame(rows).to_excel(writer, sheet_name="Scenario Comparison", index=False, startrow=4)
     else:
         pd.DataFrame([{"Note": "No scenario comparison results available."}]).to_excel(
             writer, sheet_name="Scenario Comparison", index=False

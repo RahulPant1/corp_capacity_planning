@@ -18,6 +18,10 @@ class ScenarioParams:
     global_rto_mandate_days: Optional[float] = None
     excluded_floors: List[str] = field(default_factory=list)
     capacity_reduction_pct: float = 0.0
+    # Optimizer constraints — persisted when Accept & Apply is used
+    optimizer_objective: Optional[str] = None    # "optimal_placement" | "rto_based" | "rto_whatif"
+    max_floors_per_unit: Optional[int] = None
+    pinned_tower_ids: Optional[dict] = None      # {unit_name: [tower_id, ...]}
 
 
 @dataclass

@@ -298,8 +298,16 @@ def generate_pdf_report(scenario, floors, units, attendance_map,
         ["Planning Buffer",     rule_config.get('planning_buffer_level', 'balanced').capitalize()],
     ]
     if scenario.params.excluded_floors:
-        meta_rows.append(["Excluded Floors",
-                           ", ".join(scenario.params.excluded_floors)])
+        meta_rows.append(["Excluded Floors", ", ".join(scenario.params.excluded_floors)])
+    _obj_lbl = {"optimal_placement": "Optimal Placement", "rto_based": "RTO-Based", "rto_whatif": "What-If RTO"}
+    if scenario.params.optimizer_objective:
+        meta_rows.append(["Optimizer Mode", _obj_lbl.get(scenario.params.optimizer_objective, scenario.params.optimizer_objective)])
+    if scenario.params.max_floors_per_unit:
+        meta_rows.append(["Max Floors/Unit", str(scenario.params.max_floors_per_unit)])
+    if scenario.params.capacity_reduction_pct:
+        meta_rows.append(["Floor Capacity −", f"{scenario.params.capacity_reduction_pct:.0%}"])
+    if scenario.params.pinned_tower_ids:
+        meta_rows.append(["Tower Restrictions", f"{len(scenario.params.pinned_tower_ids)} unit(s)"])
 
     meta_t = Table([[Paragraph(r[0], bold), Paragraph(r[1], body)]
                     for r in meta_rows],

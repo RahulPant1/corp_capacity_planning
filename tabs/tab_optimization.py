@@ -740,6 +740,9 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
                     global_rto_mandate_days=lrp.get("rto_mandate"),
                     capacity_reduction_pct=lrp.get("cap_red", 0.0),
                     excluded_floors=scenario.params.excluded_floors,
+                    optimizer_objective=lrp.get("objective", selected_obj),
+                    max_floors_per_unit=max_floors_val if max_floors_val != 3 else None,
+                    pinned_tower_ids=pinned_tower_ids if pinned_tower_ids else None,
                 )
                 # Apply floor assignments from optimizer
                 scenario.floor_assignments = result.assignments
@@ -926,6 +929,26 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
             run_matrix = False
         else:
             st.info(f"**{n_combos} combination{'s' if n_combos != 1 else ''}** will be run.")
+
+            # Parameter interaction guidance
+            _guidance = []
+            if use_rto and use_capred:
+                _guidance.append(
+                    "**Capacity Reduction** shrinks physical seat *supply* (floor seats × (1 − cap_red%)). "
+                    "**RTO Mandate** raises the in-office attendance floor, affecting projected *demand*. "
+                    "These are independent dimensions — both apply simultaneously when non-zero. "
+                    "If your teams already attend at or above the mandate, varying RTO will not change demand outcomes."
+                )
+            if use_rto and "rto_based" in cmp_obj_vals:
+                _guidance.append(
+                    "**RTO-Based optimization** mode derives seat needs directly from attendance — it ignores Alloc %. "
+                    "Alloc % variations produce the same results in RTO-Based mode (shown as N/A in the table)."
+                )
+            if _guidance:
+                with st.expander("ℹ️ Parameter interaction notes", expanded=True):
+                    for note in _guidance:
+                        st.caption(note)
+
             run_matrix = st.button(
                 f"Run All {n_combos} Scenarios", type="primary", key="btn_run_matrix",
             )
@@ -984,6 +1007,7 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
                     "RTO": f"{r['rto_mandate']:.1f}d",
                     "Cap Red": f"{r['cap_red']:.0%}",
                     "Mode": {"optimal_placement": "Optimal", "rto_based": "RTO", "rto_whatif": "WI"}.get(r["objective"], r["objective"]),
+                    "RTO Active?": "Yes" if r.get("rto_binding") else "No",
                     "Demand": f"{r['demand']:,}",
                     "Capacity": f"{r['capacity']:,}",
                     "Headroom": f"{r['headroom']:+,}",
@@ -997,6 +1021,22 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
                     "Score": f"{r.get('composite_score', 0):.3f}",
                 })
             st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+
+            # Redundancy detection: flag RTO combinations where demand is identical despite different RTO values
+            _rdf = pd.DataFrame([{
+                "alloc": r.get("alloc_pct"), "cap": r.get("cap_red"),
+                "obj": r.get("objective"), "rto": r.get("rto_mandate"), "demand": r.get("demand"),
+            } for r in ranked_results])
+            _redundant_count = 0
+            for _, grp in _rdf.groupby(["alloc", "cap", "obj"]):
+                if grp["demand"].nunique() == 1 and grp["rto"].nunique() > 1:
+                    _redundant_count += len(grp) - 1
+            if _redundant_count > 0:
+                st.caption(
+                    f"ℹ️ **{_redundant_count} combination(s)** produced identical demand values despite different RTO "
+                    "mandates — the mandate was non-binding (base attendance already met or exceeded it). "
+                    "These rows show the same demand but may differ in capacity/headroom if cap_red varied."
+                )
 
             # Charts
             valid_ranked = [r for r in ranked_results if not r["opt_status"].startswith("Error")]

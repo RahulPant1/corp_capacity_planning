@@ -476,6 +476,137 @@ def render(sidebar_state):
             else:
                 st.info("No other alerts.")
 
+    # ── Holistic Executive Report Download ────────────────────────────────────
+    st.divider()
+    st.subheader("📋 Download Executive Report")
+    st.caption(
+        "Consolidated workbook and PDF covering scenario analysis, short-term demand forecast, "
+        "floor intelligence, and unit risk register — designed for CPG leadership briefings."
+    )
+
+    def _compute_holistic_data():
+        """Compute all demand analytics needed for the holistic report."""
+        import math
+        _daily_df = get_daily_attendance_df()
+        _unit_names = [u.unit_name for u in get_units()]
+        _stf_results, _alert_days, _dow_df = [], [], None
+        _conflict, _peak_data, _breach_data, _clusters = {}, [], [], []
+
+        if _daily_df is not None and not _daily_df.empty:
+            from engine.forecasting import (
+                compute_per_unit_forecast, compute_dow_patterns,
+                compute_dow_conflict_analysis, compute_temporal_clustering,
+                compute_capacity_breach_probability, compute_peak_day_per_unit,
+            )
+            from config.defaults import FORECAST_CAPACITY_ALERT_THRESHOLD
+            _stf_horizon = 10
+            _raw_stf = compute_per_unit_forecast(_daily_df, _stf_horizon)
+            _stf_results = _raw_stf or []
+            _dow_df = compute_dow_patterns(_daily_df)
+            _conflict = compute_dow_conflict_analysis(_daily_df) or {}
+            _clusters = compute_temporal_clustering(_daily_df, _unit_names) or []
+            _peak_data = compute_peak_day_per_unit(_daily_df) or []
+
+            _active = get_active_scenario()
+            if _active and _active.allocation_results:
+                _alloc_map_h = {a.unit_name: a.allocated_seats for a in _active.allocation_results}
+                _total_cap = sum(a.allocated_seats for a in _active.allocation_results)
+                for _name in _unit_names:
+                    if _name in _alloc_map_h:
+                        _r = compute_capacity_breach_probability(_daily_df, _name, _alloc_map_h[_name])
+                        if _r:
+                            _breach_data.append(_r)
+                if _total_cap > 0:
+                    _day_totals = {}
+                    for _row in _stf_results:
+                        _d = _row.get("date")
+                        _day_totals[_d] = _day_totals.get(_d, 0) + _row.get("expected_seats", 0)
+                    _alert_days = [
+                        {"date": _d, "total": _t, "capacity_pct": _t / _total_cap}
+                        for _d, _t in _day_totals.items()
+                        if _t / _total_cap > FORECAST_CAPACITY_ALERT_THRESHOLD
+                    ]
+
+        return _daily_df, _unit_names, _stf_results, _alert_days, _dow_df, _conflict, _peak_data, _breach_data, _clusters
+
+    if scenario and scenario.allocation_results:
+        _hol_col1, _hol_col2 = st.columns(2)
+        with _hol_col1:
+            if st.button("Prepare Excel Report", key="btn_holistic_xl", use_container_width=True):
+                with st.spinner("Building holistic Excel report…"):
+                    try:
+                        _h_daily_df, _h_unit_names, _h_stf, _h_alert, _h_dow, _h_conflict, _h_peak, _h_breach, _h_clusters = _compute_holistic_data()
+                        from engine.holistic_report_generator import generate_holistic_report
+                        _xl_bytes = generate_holistic_report(
+                            scenario=scenario,
+                            floors=get_floors(),
+                            units=get_units(),
+                            att_map={a.unit_name: a for a in get_attendance()},
+                            rule_config=get_rule_config(),
+                            daily_df=_h_daily_df,
+                            unit_names=_h_unit_names,
+                            stf_results=_h_stf,
+                            alert_days=_h_alert,
+                            dow_df=_h_dow,
+                            conflict=_h_conflict,
+                            peak_data=_h_peak,
+                            breach_data=_h_breach,
+                            clusters=_h_clusters,
+                            matrix_results=st.session_state.get("cmp_matrix_results", []),
+                        )
+                        st.session_state["_holistic_xl_bytes"] = _xl_bytes
+                        st.session_state["_holistic_xl_name"] = f"CPG_Executive_Report_{scenario.name}.xlsx"
+                    except Exception as _e:
+                        st.error(f"Report generation failed: {_e}")
+            if "_holistic_xl_bytes" in st.session_state:
+                st.download_button(
+                    "⬇ Download Excel (.xlsx)",
+                    data=st.session_state["_holistic_xl_bytes"],
+                    file_name=st.session_state.get("_holistic_xl_name", "CPG_Executive_Report.xlsx"),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_holistic_xl",
+                    use_container_width=True,
+                )
+
+        with _hol_col2:
+            if st.button("Prepare PDF Report", key="btn_holistic_pdf", use_container_width=True):
+                with st.spinner("Building holistic PDF report…"):
+                    try:
+                        _h_daily_df, _h_unit_names, _h_stf, _h_alert, _h_dow, _h_conflict, _h_peak, _h_breach, _h_clusters = _compute_holistic_data()
+                        from engine.holistic_pdf_report_generator import generate_holistic_pdf_report
+                        _pdf_bytes = generate_holistic_pdf_report(
+                            scenario=scenario,
+                            floors=get_floors(),
+                            units=get_units(),
+                            att_map={a.unit_name: a for a in get_attendance()},
+                            rule_config=get_rule_config(),
+                            daily_df=_h_daily_df,
+                            unit_names=_h_unit_names,
+                            stf_results=_h_stf,
+                            alert_days=_h_alert,
+                            dow_df=_h_dow,
+                            conflict=_h_conflict,
+                            peak_data=_h_peak,
+                            breach_data=_h_breach,
+                            clusters=_h_clusters,
+                            matrix_results=st.session_state.get("cmp_matrix_results", []),
+                        )
+                        st.session_state["_holistic_pdf_bytes"] = _pdf_bytes
+                        st.session_state["_holistic_pdf_name"] = f"CPG_Executive_Report_{scenario.name}.pdf"
+                    except Exception as _e:
+                        st.error(f"PDF generation failed: {_e}")
+            if "_holistic_pdf_bytes" in st.session_state:
+                st.download_button(
+                    "⬇ Download PDF (.pdf)",
+                    data=st.session_state["_holistic_pdf_bytes"],
+                    file_name=st.session_state.get("_holistic_pdf_name", "CPG_Executive_Report.pdf"),
+                    mime="application/pdf",
+                    key="dl_holistic_pdf",
+                    use_container_width=True,
+                )
+    else:
+        st.info("Run a Policy Simulation in What-If Analysis first to enable the full executive report.")
+
     # --- AI Executive Brief (hidden; only visible when GEMINI_API_KEY is set) ---
     from config.ai_config import is_ai_enabled, generate_executive_brief
     if is_ai_enabled():

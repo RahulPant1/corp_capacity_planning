@@ -746,8 +746,10 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
                 for alloc in scenario.allocation_results:
                     alloc.allocated_seats = result.unit_allocations.get(alloc.unit_name, 0)
                     alloc.seat_gap = alloc.allocated_seats - alloc.effective_demand_seats
-                # Re-run scenario so all tabs see updated demand
+                # Re-run scenario so all tabs see updated demand (recalculates allocation_results)
                 scenario = run_scenario(scenario, units, att_map_raw, raw_floors, rc)
+                # Restore optimizer floor assignments — run_scenario overwrites with unconstrained spatial re-assignment
+                scenario.floor_assignments = result.assignments
                 update_scenario(scenario)
                 add_audit_entry(
                     "accept_optimization", scenario.scenario_id,

@@ -659,11 +659,11 @@ def _write_demand_patterns(writer, dow_df, clusters, has_daily):
         return
 
     # DOW pivot
-    DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    DAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri"]
     try:
         pivot = dow_df.pivot_table(
             index="unit_name", columns="day_name",
-            values="median_count", aggfunc="first",
+            values="median_count", aggfunc="sum",
         )[DAY_ORDER]
         pivot.columns.name = None
         pivot = pivot.reset_index().rename(columns={"unit_name": "Unit"})

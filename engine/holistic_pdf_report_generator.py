@@ -631,10 +631,10 @@ def _page_demand_patterns(story, dow_df, clusters, conflict, peak_data, has_dail
         story.append(Spacer(1, 0.1 * cm))
         try:
             import pandas as pd
-            DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+            DAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri"]
             pivot = dow_df.pivot_table(
                 index="unit_name", columns="day_name",
-                values="median_count", aggfunc="first",
+                values="median_count", aggfunc="sum",
             ).reindex(columns=DAY_ORDER, fill_value=0)
             pivot.index.name = None
             pivot.columns.name = None

@@ -155,44 +155,42 @@ def _footer(canvas, doc):
 
 # ── Page builders ─────────────────────────────────────────────────────────────
 
-def _page_executive_summary(summaries, stf_results, alert_days, conflict, breach_data, clusters, styles):
+def _page_executive_summary(summaries, stf_results, alert_days, conflict, breach_data, clusters, styles, scenario=None):
     _, h2, body, caption, bold, *_ = styles
     story = []
     story += _section_header("Executive Summary", styles)
 
-    # KPI row
-    total_current = sum(s.get("current_median", 0) for s in (summaries or []))
-    total_forecast = sum(s.get("forecasted_median", 0) for s in (summaries or []))
     risk_days = len(alert_days) if alert_days else 0
     high_risk_count = sum(
         1 for d in (breach_data or []) if d.get("breach_probability", 0) >= 0.20
     )
+    stf_horizon = len(stf_results) if stf_results else 0
 
     story.append(
         _kpi_row([
-            (f"{total_current:,}", "Current Demand (Median Seats)"),
-            (f"{total_forecast:,}", "Forecasted Demand (6 months)"),
+            (str(stf_horizon), "Short-Term Forecast Days"),
             (str(risk_days), "Capacity Risk Days (>90%)"),
             (str(high_risk_count), "High Breach-Risk Units"),
+            (str(len(set(c.get("cluster_id") for c in (clusters or [])))), "Attendance Groups"),
         ], styles)
     )
     story.append(Spacer(1, 0.4 * cm))
 
-    # Key metrics table
+    # Scenario context + key metrics table
     overloaded = (conflict or {}).get("overloaded_days", [])
     stagger_units = [s.get("unit_name", "") for s in (conflict or {}).get("suggestions", [])]
     high_risk_names = [d.get("unit_name", "") for d in (breach_data or []) if d.get("breach_probability", 0) >= 0.20]
-
-    overall_growth = (
-        (total_forecast - total_current) / total_current * 100
-        if total_current > 0 else 0.0
+    scenario_name = scenario.name if scenario else "Baseline"
+    rto_mandate = (
+        f"{scenario.params.global_rto_mandate_days}d RTO mandate"
+        if scenario and scenario.params and scenario.params.global_rto_mandate_days
+        else "Default (attendance-based)"
     )
 
     metrics = [
-        ("Units Analysed", str(len(summaries) if summaries else 0)),
-        ("Overall Growth Direction", f"{overall_growth:+.1f}%"),
+        ("Scenario (Allocation Rules)", scenario_name),
+        ("Allocation Rule", rto_mandate),
         ("Overloaded DOW Days", ", ".join(overloaded) if overloaded else "None"),
-        ("Attendance Groups", str(len(set(c.get("cluster_id") for c in (clusters or []))))),
     ]
     metric_rows = [[Paragraph(k, bold), Paragraph(v, body)] for k, v in metrics]
     metric_table = _std_table(
@@ -221,7 +219,7 @@ def _page_executive_summary(summaries, stf_results, alert_days, conflict, breach
 
     story.append(Spacer(1, 0.3 * cm))
     story.append(Paragraph(
-        "See subsequent pages for detailed analysis: Forecast Summary → Short-Term Forecast → "
+        "See subsequent pages: Short-Term Forecast → "
         "DOW Patterns → Capacity Breach Risk → Load Balancing → Overflow Planning → Temporal Clusters.",
         caption,
     ))
@@ -822,15 +820,9 @@ def generate_demand_pdf_report(
 
     try:
         story += _page_executive_summary(
-            summaries, stf_results, alert_days, conflict, breach_data or [], clusters, styles
+            summaries, stf_results, alert_days, conflict, breach_data or [], clusters, styles,
+            scenario=scenario,
         )
-    except Exception:
-        pass
-
-    story.append(PageBreak())
-
-    try:
-        story += _page_forecast_summary(summaries, forecast_months, styles)
     except Exception:
         pass
 

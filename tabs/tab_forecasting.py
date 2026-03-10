@@ -509,10 +509,12 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
             })
         st.dataframe(pd.DataFrame(detail_rows), use_container_width=True, hide_index=True)
         if alloc_map:
+            _scen_label = f"**{_scen.name}**" if _scen else "active scenario"
             st.caption(
+                f"**Allocation column** uses the {_scen_label} seat assignment. "
                 "**vs Allocation**: positive = scenario assigns more seats than percentile demand "
                 "(possible right-sizing opportunity) · "
-                "negative = scenario assigns fewer seats (potential overflow risk)"
+                "negative = scenario assigns fewer seats (potential overflow risk)."
             )
 
     # ── Section 4b: Short-Term Demand Forecast ─────────────────────────────
@@ -615,6 +617,8 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
                     "Coordinate with Facilities to designate them as flex space on those specific days — no permanent reassignment needed."
                 )
                 _of_scenario = get_active_scenario()
+                if _of_scenario:
+                    st.caption(f"Using allocation from: **{_of_scenario.name}**")
                 if _of_scenario and _of_scenario.floor_assignments and _of_scenario.allocation_results:
                     from engine.spatial import get_floor_utilization
                     _of_floors = get_floors()
@@ -718,10 +722,15 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
 
     with st.expander("Peak Day Load Balancing Advisory", expanded=_has_overload):
         st.markdown(
-            "Identifies departments whose peak days cluster on the same weekday, "
-            "creating avoidable load spikes. Shift suggestions help managers negotiate "
-            "voluntary RTO day changes to flatten the weekly demand curve. "
-            "**Red bars** below indicate days where total attendance exceeds 115% of the weekly average."
+            "Identifies departments whose peak days coincide on the same weekday, "
+            "creating avoidable load spikes. **Red bars** indicate days where total attendance "
+            "exceeds 115% of the weekly average.  \n\n"
+            "**Why units co-peak matters:** Units in the same **Temporal Cluster** "
+            "(see Advanced Insights → 🔗 Temporal Clusters) have correlated attendance rhythms — "
+            "they naturally peak together by design, not coincidence. Stagger suggestions work "
+            "best for units **across different clusters** (low correlation = genuinely independent "
+            "schedules). Same-cluster units may need policy-level coordination rather than "
+            "voluntary day shifts to meaningfully flatten load."
         )
 
         if conflict["day_loads"]:
@@ -762,9 +771,11 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
             # Peak Day per Unit table
             peak_data_tab = _cached_peak_day_per_unit(daily_df)
             if peak_data_tab:
+                _cluster_map = st.session_state.get("unit_cluster_map", {})
                 st.markdown("**Peak Day per Unit**")
                 peak_rows = [{
                     "Unit": p["unit_name"],
+                    "Cluster": f"Group {_cluster_map[p['unit_name']]}" if p["unit_name"] in _cluster_map else "—",
                     "Peak Day": p["peak_day_name"],
                     "Peak Median": p["peak_day_median"],
                     "Avg Median": p["overall_median"],
@@ -772,6 +783,12 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
                     "Overloaded Day?": "⚠️ Yes" if p["peak_day_name"] in overloaded else "✅ No",
                 } for p in peak_data_tab]
                 st.dataframe(pd.DataFrame(peak_rows), use_container_width=True, hide_index=True)
+                if _cluster_map:
+                    st.caption(
+                        "**Cluster** = attendance correlation group from Temporal Clustering. "
+                        "Units sharing a Cluster ID co-peak by structural pattern — "
+                        "see Advanced Insights → 🔗 Temporal Clusters for full group details."
+                    )
 
             # Stagger suggestions
             suggestions = conflict["suggestions"]
@@ -784,9 +801,32 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
                     "Est. Load Moved Off Peak Day": s["load_reduction"],
                 } for s in suggestions]
                 st.dataframe(pd.DataFrame(sug_rows), use_container_width=True, hide_index=True)
+                _cluster_map_sug = st.session_state.get("unit_cluster_map", {})
+                _same_cluster_warnings = []
+                for s in suggestions:
+                    _uc = _cluster_map_sug.get(s["unit_name"])
+                    if _uc is not None:
+                        _peers = [
+                            p["unit_name"] for p in peak_data_tab
+                            if _cluster_map_sug.get(p["unit_name"]) == _uc
+                            and p["unit_name"] != s["unit_name"]
+                            and p["peak_day_name"] == s["current_peak_day"]
+                        ]
+                        if _peers:
+                            _same_cluster_warnings.append(s["unit_name"])
+
+                if _same_cluster_warnings:
+                    st.warning(
+                        f"**Same-cluster co-peak detected for: {', '.join(_same_cluster_warnings)}.**  "
+                        "These units share an attendance correlation cluster — their peak days are "
+                        "structurally linked. Voluntary day shifts may have limited effect; "
+                        "consider policy-level coordination (e.g., staggered team meeting cadences) "
+                        "or floor-level buffer planning for these units."
+                    )
                 st.info(
-                    "These suggestions are **advisory only** — share with unit managers to "
-                    "negotiate voluntary RTO day shifts. No changes are applied automatically."
+                    "Suggestions are **advisory only** — share with unit managers to negotiate "
+                    "voluntary RTO day shifts. Units across **different clusters** are the best "
+                    "candidates for effective staggering. No changes are applied automatically."
                 )
             elif overloaded:
                 st.info("No specific shift suggestions could be generated for overloaded days.")
@@ -798,19 +838,19 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
     st.subheader("Advanced Insights")
 
     adv_tab1, adv_tab2 = st.tabs([
-        "⚠️ Real vs Perceived Capacity Breach", "🔗 Temporal Clusters",
+        "⚠️ Scenario Risk (Forecast vs Allocation)", "🔗 Temporal Clusters",
     ])
 
     with adv_tab1:
         st.caption(
-            "**Statistical Risk** (left tab): how often has historical attendance exceeded allocation? "
-            "**Scenario Risk** (right tab): does the short-term forecast exceed allocated seats? "
-            "Together they separate real operational breaches from historical variance."
+            "Compares the **short-term forecast peak** against your scenario's allocated seats, "
+            "crossed with the historical 95th percentile to distinguish real operational breaches "
+            "from statistical variance."
         )
         if is_data_loaded():
             scenario = get_active_scenario()
             if scenario and scenario.allocation_results:
-                # ── shared: compute alloc_map and breach_data once for both sub-tabs ──
+                # ── compute alloc_map and breach_data (breach_data retained for report download) ──
                 alloc_map = {
                     a.unit_name: a.allocated_seats
                     for a in scenario.allocation_results
@@ -824,72 +864,8 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
                         if result:
                             breach_data.append(result)
 
-                breach_tab1, breach_tab2 = st.tabs([
-                    "📊 Statistical Risk (Historical)", "🎯 Scenario Risk (Forecast vs Allocation)",
-                ])
-
-                with breach_tab1:
-                    if breach_data:
-                        import math
-
-                        def _risk_tier(prob):
-                            if prob >= 0.20:
-                                return "🔴 High"
-                            if prob >= 0.10:
-                                return "🟡 Medium"
-                            return "🟢 Low"
-
-                        def _seats_to_fix(magnitude):
-                            return int(math.ceil(magnitude / 5) * 5) if magnitude > 0 else 0
-
-                        # Summary callouts
-                        high_risk = [d for d in breach_data if d["breach_probability"] >= 0.20]
-                        most_critical = max(breach_data, key=lambda d: d["expected_breach_days_per_month"])
-                        if high_risk:
-                            st.warning(
-                                f"**{len(high_risk)} unit{'s' if len(high_risk) != 1 else ''} at high overflow risk** · "
-                                f"Most critical: **{most_critical['unit_name']}** — "
-                                f"~{most_critical['expected_breach_days_per_month']:.0f} overflow days/month"
-                            )
-                        else:
-                            st.success(
-                                f"No units at high overflow risk · Most at-risk: **{most_critical['unit_name']}** — "
-                                f"~{most_critical['expected_breach_days_per_month']:.0f} overflow days/month"
-                            )
-
-                        # Redesigned table
-                        rows = []
-                        for d in breach_data:
-                            prob = d["breach_probability"]
-                            mag = d["avg_breach_magnitude"]
-                            rows.append({
-                                "Risk": _risk_tier(prob),
-                                "Unit": d["unit_name"],
-                                "Seats Allocated": d["allocated_seats"],
-                                "% Days Overflow": f"{prob:.0%} of days",
-                                "Overflow Days/Month": f"~{d['expected_breach_days_per_month']:.0f} days",
-                                "Extra People Needed": f"+{mag:.0f} people" if mag > 0 else "none",
-                                "Seats to Add (Fix)": f"+{_seats_to_fix(mag)}" if mag > 0 else "—",
-                            })
-                        # Sort by risk: high first
-                        risk_order = {"🔴 High": 0, "🟡 Medium": 1, "🟢 Low": 2}
-                        rows.sort(key=lambda r: risk_order.get(r["Risk"], 9))
-                        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-                        st.caption(
-                            "**Risk:** 🔴 High = overflows 1 in 5 days or more · "
-                            "🟡 Medium = 1 in 10 days · 🟢 Low = rare  |  "
-                            "**Seats to Add** = average overflow gap rounded to nearest 5 — "
-                            "adding this many seats would eliminate most overflow days."
-                        )
-                    else:
-                        st.info("No breach data available for units in daily attendance data.")
-
-                with breach_tab2:
-                    st.caption(
-                        "Compares the **short-term forecast peak** (next N business days) against your "
-                        "scenario's allocated seats — crossed with the historical 95th percentile to tell "
-                        "real operational breaches from statistical variance."
-                    )
+                # ── Scenario Risk content ─────────────────────────────────────────
+                if True:
 
                     # ── Scenario selector ────────────────────────────────────────────
                     matrix_results = st.session_state.get("cmp_matrix_results", [])
@@ -1155,8 +1131,9 @@ Holt-Winters ETS activates automatically once ≥ 12 weekday observations are av
     # ── Download Report ────────────────────────────────────────────────────
     st.divider()
     _render_demand_download(
-        daily_df, unit_names, 6,  # always 6-month label for the report
-        summaries, stf_results, alert_days,
+        daily_df, unit_names, 6,
+        None,           # summaries suppressed — report focuses on short-term only
+        stf_results, alert_days,
         dow_df, conflict, peak_data_tab,
         breach_data, clusters,
     )

@@ -171,7 +171,7 @@ def _executive_summary_text(scenario, floors, allocs, opt_history=None):
     supply = sum(f.total_seats for f in floors)
     demand = sum(a.effective_demand_seats for a in allocs)
     alloc = sum(a.allocated_seats for a in allocs)
-    gap = alloc - demand
+    gap = supply - demand
     gap_word = "surplus" if gap >= 0 else "shortfall"
     at_risk = sum(1 for a in allocs if a.seat_gap < 0)
     n_units = len(allocs)
@@ -181,10 +181,12 @@ def _executive_summary_text(scenario, floors, allocs, opt_history=None):
         f"\"{scenario.name}\" ({scenario.scenario_type}) over a "
         f"{scenario.planning_horizon_months}-month planning horizon.",
         "",
-        f"Total seat supply across {n_buildings} building(s) is {supply:,} seats "
-        f"against a projected demand of {demand:,} seats, resulting in a net "
-        f"{gap_word} of {abs(gap):,} seats. "
-        f"{at_risk} of {n_units} business unit(s) are flagged as at-risk due to "
+        f"Total physical seat supply across {n_buildings} building(s): {supply:,} seats. "
+        f"Projected demand across {n_units} business unit(s): {demand:,} seats. "
+        f"Seats allocated by policy: {alloc:,} seats. "
+        f"Overall supply vs demand: net {gap_word} of {abs(gap):,} seats "
+        f"({gap:+,} seats headroom). "
+        f"{at_risk} of {n_units} unit(s) are individually at-risk due to "
         f"seat shortfalls or high fragmentation.",
     ]
 

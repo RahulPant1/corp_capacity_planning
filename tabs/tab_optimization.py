@@ -348,13 +348,15 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
                     _overrides_ps[_uname] = _ov
             scenario.unit_overrides = _overrides_ps
             scenario.params = ScenarioParams(
-                global_rto_mandate_days=scenario.params.global_rto_mandate_days,
+                global_rto_mandate_days=wi_rto,
                 capacity_reduction_pct=wi_cap_red_pct / 100.0,
                 excluded_floors=wi_excluded_floors,
             )
             _rc_ps = dict(get_rule_config())
             if use_cluster_diversity and cluster_map_wi:
                 _rc_ps["cluster_map"] = cluster_map_wi
+            if pinned_tower_ids:
+                _rc_ps["tower_restrictions"] = pinned_tower_ids
             scenario = run_scenario(scenario, _base_units, _att_map_ps, raw_floors, _rc_ps)
             update_scenario(scenario)
             add_audit_entry(

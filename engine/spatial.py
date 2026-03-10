@@ -83,6 +83,7 @@ def assign_units_to_floors(
     excluded_floor_ids: List[str] = None,
     cluster_map: Dict[str, int] = None,
     diversity_weight: float = 800,
+    tower_restrictions: Dict[str, List[str]] = None,
 ) -> Tuple[List[FloorAssignment], Dict[str, float]]:
     """Assign allocated seats to physical floors. Returns assignments and fragmentation scores.
 
@@ -121,6 +122,10 @@ def assign_units_to_floors(
                 if remaining <= 0:
                     continue
                 f = floor_map[fid]
+                # Skip floors outside this unit's tower restriction
+                if tower_restrictions and unit_name in tower_restrictions:
+                    if f.tower_id not in tower_restrictions[unit_name]:
+                        continue
                 s = score_floor_for_unit(f, remaining, assignments, unit_name, floors_used)
 
                 # Cluster diversity adjustment: bonus for cross-cluster, penalty for same-cluster

@@ -64,16 +64,9 @@ def _write_info_row(writer, sheet_name: str, msg: str):
 def _write_da_executive_summary(
     writer, daily_df, unit_names, summaries, stf_results, alert_days,
     conflict, breach_data, clusters, rule_config, forecast_months,
+    scenario=None,
 ):
     sheet = "Executive Summary"
-
-    # Derive key metrics
-    total_current = sum(s.get("current_median", 0) for s in (summaries or []))
-    total_forecast = sum(s.get("forecasted_median", 0) for s in (summaries or []))
-    overall_growth_pct = (
-        (total_forecast - total_current) / total_current * 100
-        if total_current > 0 else 0.0
-    )
 
     stf_horizon = len(stf_results) if stf_results else 0
     risk_days = len(alert_days) if alert_days else 0
@@ -88,6 +81,14 @@ def _write_da_executive_summary(
         s["unit_name"] for s in (conflict or {}).get("suggestions", [])
     ]
 
+    # Scenario context
+    scenario_name = scenario.name if scenario else "Baseline"
+    rto_mandate = (
+        f"{scenario.params.global_rto_mandate_days}d RTO mandate"
+        if scenario and scenario.params and scenario.params.global_rto_mandate_days
+        else "Default (attendance-based)"
+    )
+
     # Data period from daily_df
     if daily_df is not None and not daily_df.empty and "date" in daily_df.columns:
         dates = pd.to_datetime(daily_df["date"])
@@ -99,11 +100,8 @@ def _write_da_executive_summary(
         ("Report Generated", datetime.now().strftime("%Y-%m-%d %H:%M")),
         ("Units Analysed", len(unit_names) if unit_names else 0),
         ("Data Period", data_period),
-        ("Forecast Horizon (months)", forecast_months),
-        ("", ""),
-        ("Total Seat Demand — Current Median", f"{total_current:,}"),
-        ("Total Seat Demand — Forecast 6m", f"{total_forecast:,}"),
-        ("Overall Growth Direction", f"{overall_growth_pct:+.1f}%"),
+        ("Scenario (Allocation Rules)", scenario_name),
+        ("Allocation Rule", rto_mandate),
         ("", ""),
         ("Short-Term Forecast Days", stf_horizon),
         ("Capacity Risk Days (>90%)", risk_days),
@@ -126,9 +124,9 @@ def _write_da_executive_summary(
         ),
         ("", ""),
         ("Next Steps", (
-            "1. Review Forecast Summary sheet for per-unit growth actions. "
-            "2. Check Capacity Breach Risk sheet for seat addition priorities. "
-            "3. Share Load Balancing sheet with unit managers for stagger coordination."
+            "1. Check Capacity Breach Risk sheet for seat addition priorities. "
+            "2. Share Load Balancing sheet with unit managers for stagger coordination. "
+            "3. Review Overflow Planning sheet for peak-day flex floor options."
         )),
     ]
 
@@ -722,11 +720,8 @@ def generate_demand_report(
             _write_da_executive_summary(
                 writer, daily_df, unit_names, summaries, stf_results, alert_days,
                 conflict, breach_data or [], clusters, rule_config, forecast_months,
+                scenario=scenario,
             )
-        except Exception:
-            pass
-        try:
-            _write_da_forecast_summary(writer, summaries, forecast_months)
         except Exception:
             pass
         try:

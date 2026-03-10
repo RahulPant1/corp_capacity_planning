@@ -23,6 +23,11 @@ def render(sidebar_state):
         st.info("No floor assignments available. Run a Policy Simulation from the What-If Analysis tab.")
         return
 
+    st.caption(
+        f"Showing: **{scenario.name}** · "
+        f"Last run: {scenario.last_run_at.strftime('%b %d, %H:%M') if scenario.last_run_at else 'Not yet run'}"
+    )
+
     floors = get_floors()
     assignments = scenario.floor_assignments
     allocations = scenario.allocation_results

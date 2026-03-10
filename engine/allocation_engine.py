@@ -185,10 +185,14 @@ def compute_all_allocations(
     horizon_months: int,
     rule_config: Optional[dict] = None,
 ) -> List[AllocationRecommendation]:
-    """Compute recommended allocation for all units using flat % allocation."""
+    """Compute allocation for all units: attendance-based when data available, flat % fallback."""
     results = []
     for unit in units:
-        results.append(compute_simple_allocation(unit, horizon_months, rule_config))
+        att = attendance_map.get(unit.unit_name) if attendance_map else None
+        if att:
+            results.append(compute_recommended_allocation(unit, att, horizon_months, rule_config))
+        else:
+            results.append(compute_simple_allocation(unit, horizon_months, rule_config))
     return results
 
 

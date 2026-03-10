@@ -10,6 +10,14 @@ from components.floor_map import render_floor_map_grid
 from config.defaults import FLOOR_SATURATION_THRESHOLD, FLOOR_SURPLUS_THRESHOLD
 
 
+@st.cache_data(show_spinner=False)
+def _cached_floor_utilization(scenario_id, last_run_at, n_floors):
+    """Cache floor utilization — recomputes only when scenario changes."""
+    from data.session_store import get_active_scenario, get_floors
+    _scenario = get_active_scenario()
+    return get_floor_utilization(get_floors(), _scenario.floor_assignments)
+
+
 def render(sidebar_state):
     """Render the Spatial / Floor View tab."""
     st.header("Spatial / Floor View")
@@ -32,8 +40,8 @@ def render(sidebar_state):
     assignments = scenario.floor_assignments
     allocations = scenario.allocation_results
 
-    # Floor utilization data
-    floor_util = get_floor_utilization(floors, assignments)
+    # Floor utilization data (cached — recomputes only when scenario changes)
+    floor_util = _cached_floor_utilization(scenario.scenario_id, str(scenario.last_run_at), len(floors))
 
     # --- Tower Selector ---
     towers = sorted(set(f.tower_id for f in floors))

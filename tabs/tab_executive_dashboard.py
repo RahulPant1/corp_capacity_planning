@@ -20,6 +20,18 @@ def _cached_week_forecast(daily_df, total_capacity):
 @st.cache_data(show_spinner=False)
 def _cached_exec_dow_patterns(daily_df):
     return compute_dow_patterns(daily_df)
+
+@st.cache_data(show_spinner=False)
+def _cached_rto_insights(scenario_id, last_run_at, n_allocs):
+    """Cache RTO alerts + key insights — recomputes only when scenario changes."""
+    from engine.allocation_engine import compute_rto_alerts
+    from engine.scenario_engine import apply_overrides
+    from data.session_store import get_units, get_attendance, get_active_scenario, get_rule_config
+    _scenario = get_active_scenario()
+    _units = get_units()
+    _att_map = {a.unit_name: a for a in get_attendance()}
+    _, _scenario_att_map = apply_overrides(_units, _att_map, _scenario)
+    return compute_rto_alerts(_scenario.allocation_results, _units, _scenario_att_map, get_rule_config())
 from components.charts import capacity_vs_demand_bar, utilization_donut, rto_need_vs_allocated_bar
 from engine.spatial import get_floor_utilization
 from engine.allocation_engine import compute_rto_alerts
@@ -102,15 +114,9 @@ def _generate_insights(allocs, floors, rto_alert_map, scenario, rule_config):
 
 def _render_key_insights(allocs, floors, scenario, rule_config):
     """Render the Key Insights strip on the Executive Dashboard."""
-    from engine.allocation_engine import compute_rto_alerts
-    from engine.scenario_engine import apply_overrides
-    from data.session_store import get_units, get_attendance
-
-    units = get_units()
-    att_profiles = get_attendance()
-    att_map = {a.unit_name: a for a in att_profiles}
-    _, scenario_att_map = apply_overrides(units, att_map, scenario)
-    rto_data = compute_rto_alerts(allocs, units, scenario_att_map, rule_config)
+    rto_data = _cached_rto_insights(
+        scenario.scenario_id, str(scenario.last_run_at), len(allocs)
+    )
     rto_alert_map = {ra["unit_name"]: ra for ra in rto_data}
 
     insights = _generate_insights(allocs, floors, rto_alert_map, scenario, rule_config)

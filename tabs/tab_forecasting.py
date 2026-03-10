@@ -125,27 +125,38 @@ def _render_demand_download(
         floors=floors,
     )
 
+    if st.button("Prepare Demand Report", key="btn_demand_prep", use_container_width=True):
+        with st.spinner("Generating demand analytics reports…"):
+            st.session_state["_demand_dl_xlsx"] = generate_demand_report(**_kwargs)
+            st.session_state["_demand_dl_pdf"] = generate_demand_pdf_report(**_kwargs)
+
     col1, col2 = st.columns(2)
     with col1:
-        xlsx_bytes = generate_demand_report(**_kwargs)
-        st.download_button(
-            label="Download Demand Report (.xlsx)",
-            data=xlsx_bytes,
-            file_name=f"demand_analytics_{_date.today()}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="btn_demand_dl_xlsx",
-            use_container_width=True,
-        )
+        if "_demand_dl_xlsx" in st.session_state:
+            st.download_button(
+                label="Download Demand Report (.xlsx)",
+                data=st.session_state["_demand_dl_xlsx"],
+                file_name=f"demand_analytics_{_date.today()}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="btn_demand_dl_xlsx",
+                use_container_width=True,
+            )
+        else:
+            st.button("Download Demand Report (.xlsx)", disabled=True,
+                      key="btn_demand_dl_xlsx", use_container_width=True)
     with col2:
-        pdf_bytes = generate_demand_pdf_report(**_kwargs)
-        st.download_button(
-            label="Download Demand Report (.pdf)",
-            data=pdf_bytes,
-            file_name=f"demand_analytics_{_date.today()}.pdf",
-            mime="application/pdf",
-            key="btn_demand_dl_pdf",
-            use_container_width=True,
-        )
+        if "_demand_dl_pdf" in st.session_state:
+            st.download_button(
+                label="Download Demand Report (.pdf)",
+                data=st.session_state["_demand_dl_pdf"],
+                file_name=f"demand_analytics_{_date.today()}.pdf",
+                mime="application/pdf",
+                key="btn_demand_dl_pdf",
+                use_container_width=True,
+            )
+        else:
+            st.button("Download Demand Report (.pdf)", disabled=True,
+                      key="btn_demand_dl_pdf", use_container_width=True)
 
 
 def render(sidebar_state):

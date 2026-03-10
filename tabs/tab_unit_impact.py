@@ -8,6 +8,17 @@ from components.tables import render_risk_table
 from engine.allocation_engine import compute_rto_alerts
 from engine.scenario_engine import apply_overrides
 from collections import defaultdict
+
+
+@st.cache_data(show_spinner=False)
+def _cached_rto_alerts(scenario_id, last_run_at, n_allocs):
+    """Cache RTO alerts — recomputes only when scenario changes."""
+    from data.session_store import get_active_scenario, get_units, get_attendance, get_rule_config
+    _scenario = get_active_scenario()
+    _units = get_units()
+    _att_map = {a.unit_name: a for a in get_attendance()}
+    _, _scenario_att_map = apply_overrides(_units, _att_map, _scenario)
+    return compute_rto_alerts(_scenario.allocation_results, _units, _scenario_att_map, get_rule_config())
 from config.defaults import (
     RISK_RED_GAP_PCT, RISK_RED_FRAGMENTATION,
     RISK_AMBER_GAP_PCT, RISK_AMBER_FRAGMENTATION,
@@ -60,11 +71,8 @@ def render(sidebar_state):
     for a in assignments:
         unit_buildings[a.unit_name].add(a.building_id)
 
-    # Compute RTO alerts (use scenario-modified attendance for RTO mandate)
-    attendance_profiles = get_attendance()
-    att_map = {a.unit_name: a for a in attendance_profiles}
-    _, scenario_att_map = apply_overrides(units, att_map, scenario)
-    rto_alerts = compute_rto_alerts(allocations, units, scenario_att_map, get_rule_config())
+    # Compute RTO alerts (cached — recomputes only when scenario changes)
+    rto_alerts = _cached_rto_alerts(scenario.scenario_id, str(scenario.last_run_at), len(allocations))
     rto_status_map = {ra["unit_name"]: ra for ra in rto_alerts}
 
     # --- Filters ---

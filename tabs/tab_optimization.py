@@ -804,41 +804,58 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
                 _included.append(f"scenario comparison ({len(_matrix)} runs)")
             st.caption("Export includes: " + ", ".join(_included) + ".")
 
-            _report_bytes = generate_scenario_report(
-                scenario=scenario,
-                floors=raw_floors,
-                units=units,
-                attendance_map=_att_rpt,
-                rule_config=get_rule_config(),
-                opt_history=_opt_hist if _opt_hist else None,
-                daily_attendance_df=_daily_df,
-                matrix_results=_matrix,
-            )
-            st.download_button(
-                label="Download Scenario Report (.xlsx)",
-                data=_report_bytes,
-                file_name=f"scenario_{scenario.name.replace(' ', '_')}_{_date.today()}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="btn_whatif_dl_xlsx",
-            )
+            # Invalidate cached report bytes if scenario was re-run since last preparation
+            _report_cache_key = f"{scenario.scenario_id}_{scenario.last_run_at}"
+            if st.session_state.get("_wi_report_key") != _report_cache_key:
+                st.session_state.pop("_wi_report_xlsx", None)
+                st.session_state.pop("_wi_report_pdf", None)
 
-            _pdf_bytes = generate_pdf_report(
-                scenario=scenario,
-                floors=raw_floors,
-                units=units,
-                attendance_map=_att_rpt,
-                rule_config=get_rule_config(),
-                opt_history=_opt_hist if _opt_hist else None,
-                daily_attendance_df=_daily_df,
-                matrix_results=_matrix,
-            )
-            st.download_button(
-                label="Download Boardroom Report (.pdf)",
-                data=_pdf_bytes,
-                file_name=f"scenario_{scenario.name.replace(' ', '_')}_{_date.today()}.pdf",
-                mime="application/pdf",
-                key="btn_whatif_dl_pdf",
-            )
+            if st.button("Prepare Scenario Report", key="btn_whatif_prep", use_container_width=True):
+                with st.spinner("Generating reports…"):
+                    st.session_state["_wi_report_xlsx"] = generate_scenario_report(
+                        scenario=scenario,
+                        floors=raw_floors,
+                        units=units,
+                        attendance_map=_att_rpt,
+                        rule_config=get_rule_config(),
+                        opt_history=_opt_hist if _opt_hist else None,
+                        daily_attendance_df=_daily_df,
+                        matrix_results=_matrix,
+                    )
+                    st.session_state["_wi_report_pdf"] = generate_pdf_report(
+                        scenario=scenario,
+                        floors=raw_floors,
+                        units=units,
+                        attendance_map=_att_rpt,
+                        rule_config=get_rule_config(),
+                        opt_history=_opt_hist if _opt_hist else None,
+                        daily_attendance_df=_daily_df,
+                        matrix_results=_matrix,
+                    )
+                    st.session_state["_wi_report_key"] = _report_cache_key
+
+            if "_wi_report_xlsx" in st.session_state:
+                _dl_c1, _dl_c2 = st.columns(2)
+                with _dl_c1:
+                    st.download_button(
+                        label="Download Scenario Report (.xlsx)",
+                        data=st.session_state["_wi_report_xlsx"],
+                        file_name=f"scenario_{scenario.name.replace(' ', '_')}_{_date.today()}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="btn_whatif_dl_xlsx",
+                        use_container_width=True,
+                    )
+                with _dl_c2:
+                    st.download_button(
+                        label="Download Boardroom Report (.pdf)",
+                        data=st.session_state["_wi_report_pdf"],
+                        file_name=f"scenario_{scenario.name.replace(' ', '_')}_{_date.today()}.pdf",
+                        mime="application/pdf",
+                        key="btn_whatif_dl_pdf",
+                        use_container_width=True,
+                    )
+            else:
+                st.caption("Click **Prepare Scenario Report** to generate the downloadable files.")
 
     st.divider()
 

@@ -16,7 +16,6 @@ from engine.scenario_comparison import run_scenario_matrix, rank_scenarios, get_
 from components.tables import render_comparison_table
 from components.comparison_charts import scenario_demand_capacity_bar, scenario_metrics_heatmap
 from config.defaults import (
-    PLANNING_BUFFER_PRESETS,
     COMPARISON_MAX_COMBINATIONS,
     COMPARISON_ALLOC_OPTIONS,
     COMPARISON_RTO_OPTIONS,
@@ -34,11 +33,9 @@ def render(sidebar_state):
 
     with st.expander("How does this work?", expanded=False):
         st.markdown("""
-**Two planning flows in one tab:**
+**Single planning flow:** set overrides → **Run & Optimize** → review results → **Accept & Apply** → **Download Report**.
 
-**1. Run Policy Simulation** — applies your unit-level overrides (growth %, alloc %) and reruns the policy allocation rules. Use this to set your baseline demand assumptions before optimising.
-
-**2. Simulate & Optimize** — runs the LP optimizer on top of the policy simulation. Choose one of three modes:
+**Run & Optimize** applies your unit-level overrides, reruns the policy allocation, then LP-optimizes floor assignments in one step. Choose the optimization mode:
 
 | Mode | Demand basis | Alloc % used? | RTO slider |
 |------|-------------|---------------|-----------|
@@ -46,7 +43,7 @@ def render(sidebar_state):
 | **RTO-Based** | Actual attendance data | ❌ No | ❌ Not used |
 | **What-If RTO** | Attendance × target RTO | ❌ No | Target RTO level |
 
-Typical flow: set overrides → **Run Policy Simulation** → review demand → **Simulate & Optimize** → **Accept & Apply** → **Download Report**.
+Results are previewed before committing — click **Accept & Apply** to push changes to the active scenario.
         """)
 
     if not is_data_loaded():
@@ -60,8 +57,8 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
 
     if not scenario.allocation_results:
         st.info(
-            "No simulation run yet. Open **Unit-Level Overrides** below, set your assumptions, "
-            "then click **Run Policy Simulation** to compute seat allocations."
+            "No results yet. Open **Unit-Level Overrides** below, set your assumptions, "
+            "then click **Run & Optimize** to compute seat allocations and floor assignments."
         )
 
     if scenario.is_locked:
@@ -171,7 +168,7 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
         default=valid_excluded,
         key="wi_excluded_floors",
         help="Remove specific floors from available supply — e.g. renovation, sublease, or decommission. "
-             "Applies to both Policy Simulation and Simulate & Optimize.",
+             "Applied when you click Run & Optimize.",
     )
 
     # =========================================================================
@@ -233,7 +230,7 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
     with st.expander("Unit-Level Overrides", expanded=False):
         st.caption(
             "Override HC growth % or pin a specific allocation % per unit. "
-            "Applied by **Run Policy Simulation** and carried into **Simulate & Optimize**."
+            "Applied when you click **Run & Optimize**."
         )
         att_profiles_ov = get_attendance()
         att_map_ov = {a.unit_name: a for a in att_profiles_ov}
@@ -309,31 +306,22 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
     # =========================================================================
     # SECTION 5: Run Buttons
     # =========================================================================
-    col1, col2, col3 = st.columns([1, 1, 2])
-    with col1:
-        run_policy = st.button(
-            "Run Policy Simulation", key="btn_run_policy",
-            help="Apply overrides and recompute allocation using policy rules only (no LP optimizer).",
-        )
-    with col2:
-        run_main = st.button("Simulate & Optimize", type="primary", key="btn_run_main")
-    with col3:
-        run_sensitivity = st.button(
-            "Run Sensitivity Analysis", key="btn_sensitivity",
-            help="Runs Lean/Balanced/Conservative buffer presets and compares seat demand range.",
-        )
+    run_main = st.button(
+        "Run & Optimize", type="primary", key="btn_run_main",
+        help="Applies overrides, runs policy allocation, then LP-optimizes floor assignments.",
+        use_container_width=True,
+    )
 
     # =========================================================================
     # SECTION 6: Handlers
     # =========================================================================
-    if run_policy:
-        with st.spinner("Running policy simulation..."):
-            _base_units = get_units()
-            _att_map_ps = {a.unit_name: a for a in get_attendance()}
-            _overrides_ps = {}
+    if run_main:
+        with st.spinner("Running policy allocation and optimizing floor placement..."):
+            # Read override table and apply to temp scenario
+            _override_map = {}
             for _, row in edited_overrides.iterrows():
                 _uname = row["Unit"]
-                _bu = next((u for u in _base_units if u.unit_name == _uname), None)
+                _bu = next((u for u in units if u.unit_name == _uname), None)
                 if not _bu:
                     continue
                 _ov = ScenarioOverride(unit_name=_uname)
@@ -345,30 +333,8 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
                     _ov.alloc_pct_override = row["Alloc % Override (0 = use policy)"] / 100.0
                     _changed = True
                 if _changed:
-                    _overrides_ps[_uname] = _ov
-            scenario.unit_overrides = _overrides_ps
-            scenario.params = ScenarioParams(
-                global_rto_mandate_days=wi_rto,
-                capacity_reduction_pct=wi_cap_red_pct / 100.0,
-                excluded_floors=wi_excluded_floors,
-            )
-            _rc_ps = dict(get_rule_config())
-            if use_cluster_diversity and cluster_map_wi:
-                _rc_ps["cluster_map"] = cluster_map_wi
-            if pinned_tower_ids:
-                _rc_ps["tower_restrictions"] = pinned_tower_ids
-            scenario = run_scenario(scenario, _base_units, _att_map_ps, raw_floors, _rc_ps)
-            update_scenario(scenario)
-            add_audit_entry(
-                "policy_simulation", scenario.scenario_id,
-                "all", "", f"Policy sim with {len(_overrides_ps)} override(s)",
-            )
-        st.session_state["policy_sim_ran"] = True
-        st.success(f"Policy simulation complete — {len(_overrides_ps)} unit override(s) applied.")
-        st.rerun()
+                    _override_map[_uname] = _ov
 
-    if run_main:
-        with st.spinner("Simulating scenario then optimizing floor placement..."):
             rc_combined = dict(rule_config_wi)
 
             # Build mode-specific params
@@ -385,8 +351,10 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
                 rto_mandate_val = None
                 target_rto_for_opt = None
 
-            # Build temp scenario with what-if params
+            # Build temp scenario with what-if params and overrides
             temp_scenario = _copy.deepcopy(scenario)
+            if _override_map:
+                temp_scenario.unit_overrides = _override_map
             temp_scenario.params = ScenarioParams(
                 global_rto_mandate_days=rto_mandate_val,
                 capacity_reduction_pct=wi_cap_red_pct / 100.0,
@@ -418,6 +386,11 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
                 min_guarantee_pct=min_guar_val,
             )
 
+        add_audit_entry(
+            "run_and_optimize", scenario.scenario_id,
+            "all", "", f"Run & Optimize ({selected_obj}) with {len(_override_map)} override(s)",
+        )
+
         # Store results + params used (for Accept & Apply)
         st.session_state["optimization_result"] = result
         st.session_state["last_sim_scenario"] = temp_scenario
@@ -438,124 +411,6 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
             "result": result,
         })
         st.session_state["optimization_history"] = history[:3]
-
-    if run_sensitivity and not scenario.allocation_results:
-        st.warning("Run a Policy Simulation first before running Sensitivity Analysis.")
-    if run_sensitivity and scenario.allocation_results:
-        with st.spinner("Running sensitivity analysis (Lean / Balanced / Conservative)..."):
-            sensitivity_rows = []
-            alloc_total = sum(a.effective_demand_seats for a in scenario.allocation_results)
-            for preset_name, preset_cfg in PLANNING_BUFFER_PRESETS.items():
-                sens_config = dict(config)
-                sens_config["peak_buffer_multiplier"] = preset_cfg["peak_buffer_multiplier"]
-                r = optimize_allocation(
-                    allocations=scenario.allocation_results,
-                    floors=effective_floors,
-                    baseline_assignments=scenario.floor_assignments,
-                    objective=selected_obj,
-                    excluded_floor_ids=[],
-                    units=units,
-                    attendance_map=scenario_att_map,
-                    rule_config=sens_config,
-                    target_rto_days=None,
-                )
-                opt_seats = sum(r.unit_allocations.values())
-                floors_used = len(set((a.tower_id, a.floor_number) for a in r.assignments))
-                sensitivity_rows.append({
-                    "Buffer Preset": preset_name.capitalize(),
-                    "Peak Buffer Multiplier": preset_cfg["peak_buffer_multiplier"],
-                    "Optimized Seats": opt_seats,
-                    "Floors Used": floors_used,
-                    "vs Allocation Rule": f"{opt_seats - alloc_total:+,}",
-                })
-            st.session_state["sensitivity_result"] = sensitivity_rows
-
-    # =========================================================================
-    # SECTION 7: Sensitivity Results
-    # =========================================================================
-    if st.session_state.get("sensitivity_result"):
-        st.divider()
-        st.subheader("Sensitivity Analysis")
-        st.caption("How seat needs vary across Lean / Balanced / Conservative planning buffer assumptions.")
-        sens_df = pd.DataFrame(st.session_state["sensitivity_result"])
-        st.dataframe(sens_df, use_container_width=True, hide_index=True)
-
-    # =========================================================================
-    # SECTION 7.5: Policy Simulation Results
-    # =========================================================================
-    if st.session_state.get("policy_sim_ran") and scenario.allocation_results:
-        st.divider()
-        st.subheader("Policy Simulation Results")
-        st.caption("Allocation based on policy rules + unit overrides. No LP optimizer applied.")
-
-        _ps_allocs = scenario.allocation_results
-        _ps_demand = sum(a.effective_demand_seats for a in _ps_allocs)
-        _ps_alloc = sum(a.allocated_seats for a in _ps_allocs)
-        _ps_gap = _ps_alloc - _ps_demand
-        _ps_risk = sum(
-            1 for a in _ps_allocs
-            if (a.seat_gap / a.effective_demand_seats if a.effective_demand_seats else 0)
-            < RISK_AMBER_GAP_PCT
-        )
-        ps1, ps2, ps3, ps4 = st.columns(4)
-        ps1.metric("Total Demand", f"{_ps_demand:,}")
-        ps2.metric("Total Allocated", f"{_ps_alloc:,}")
-        ps3.metric("Net Gap", f"{_ps_gap:+,}",
-                   delta_color="normal" if _ps_gap >= 0 else "inverse")
-        ps4.metric("Units at Risk", str(_ps_risk),
-                   delta_color="inverse" if _ps_risk > 0 else "normal")
-
-        # Cluster diversity metric (only when cluster data is available)
-        if cluster_map_wi and scenario.floor_assignments:
-            from collections import defaultdict as _defaultdict
-            _floor_clusters: dict = _defaultdict(set)
-            for _fa in scenario.floor_assignments:
-                _cid = cluster_map_wi.get(_fa.unit_name)
-                if _cid is not None:
-                    _floor_clusters[f"{_fa.tower_id} F{_fa.floor_number}"].add(_cid)
-            if _floor_clusters:
-                _avg_div = sum(len(v) for v in _floor_clusters.values()) / len(_floor_clusters)
-                st.metric(
-                    "Avg Attendance Groups / Floor",
-                    f"{_avg_div:.1f}",
-                    help=(
-                        "Average number of distinct attendance clusters across assigned floors. "
-                        "Higher = better peak diversification. "
-                        "Enable Cluster-Diverse Placement to increase this."
-                    ),
-                )
-
-        _ps_rows = []
-        for a in _ps_allocs:
-            _ps_rows.append({
-                "Unit": a.unit_name,
-                "Policy Alloc %": f"{a.recommended_alloc_pct:.1%}",
-                "Policy Demand": a.effective_demand_seats,
-                "Allocated Seats": a.allocated_seats,
-                "Gap (vs Policy)": a.seat_gap,
-                "Fragmentation": f"{a.fragmentation_score:.2f}",
-                "Overridden": "Yes" if a.is_overridden else "",
-            })
-        st.dataframe(pd.DataFrame(_ps_rows), use_container_width=True, hide_index=True)
-
-        _ps_risks = []
-        for a in _ps_allocs:
-            _gp = a.seat_gap / a.effective_demand_seats if a.effective_demand_seats > 0 else 0
-            if _gp < RISK_RED_GAP_PCT or a.fragmentation_score > RISK_RED_FRAGMENTATION:
-                _ps_risks.append((a.unit_name, "RED", _gp, a.fragmentation_score))
-            elif _gp < RISK_AMBER_GAP_PCT or a.fragmentation_score > RISK_AMBER_FRAGMENTATION:
-                _ps_risks.append((a.unit_name, "AMBER", _gp, a.fragmentation_score))
-        if _ps_risks:
-            st.markdown("**Key Risks:**")
-            for _name, _lvl, _gp, _frag in _ps_risks:
-                _parts = []
-                if _gp < RISK_AMBER_GAP_PCT:
-                    _parts.append(f"seat shortfall {_gp:.0%}")
-                if _frag > RISK_AMBER_FRAGMENTATION:
-                    _parts.append(f"high fragmentation {_frag:.2f}")
-                st.markdown(
-                    f"- :{'red' if _lvl == 'RED' else 'orange'}[{_lvl}] **{_name}** — {', '.join(_parts)}"
-                )
 
     # =========================================================================
     # SECTION 8: Combined Results Panel
@@ -744,20 +599,27 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
                     max_floors_per_unit=max_floors_val if max_floors_val != 3 else None,
                     pinned_tower_ids=pinned_tower_ids if pinned_tower_ids else None,
                 )
-                # Apply floor assignments from optimizer
-                scenario.floor_assignments = result.assignments
-                for alloc in scenario.allocation_results:
-                    alloc.allocated_seats = result.unit_allocations.get(alloc.unit_name, 0)
-                    alloc.seat_gap = alloc.allocated_seats - alloc.effective_demand_seats
-                # Re-run scenario so all tabs see updated demand (recalculates effective_demand_seats with new params)
-                scenario = run_scenario(scenario, units, att_map_raw, raw_floors, rc)
-                # Restore optimizer floor assignments — run_scenario overwrites with unconstrained spatial re-assignment
-                scenario.floor_assignments = result.assignments
-                # Restore optimizer seat counts — run_scenario overwrites allocated_seats with policy-based values
+                # Update effective_demand_seats with new params without re-running spatial assignment
+                from engine.allocation_engine import compute_all_allocations
+                from collections import defaultdict as _defaultdict
+                _units_m, _att_m = apply_overrides(units, att_map_raw, scenario)
+                _new_recs = compute_all_allocations(_units_m, _att_m, scenario.planning_horizon_months, rc)
+                _demand_map = {a.unit_name: a.effective_demand_seats for a in _new_recs}
+                # Compute fragmentation from optimizer assignments (O(assignments), fast)
+                _unit_floors: _defaultdict = _defaultdict(set)
+                for _a in result.assignments:
+                    _unit_floors[_a.unit_name].add((_a.tower_id, _a.floor_number))
                 for _alloc in scenario.allocation_results:
-                    if _alloc.unit_name in result.unit_allocations:
-                        _alloc.allocated_seats = result.unit_allocations[_alloc.unit_name]
-                        _alloc.seat_gap = _alloc.allocated_seats - _alloc.effective_demand_seats
+                    _alloc.effective_demand_seats = _demand_map.get(_alloc.unit_name, _alloc.effective_demand_seats)
+                    _alloc.allocated_seats = result.unit_allocations.get(_alloc.unit_name, 0)
+                    _alloc.seat_gap = _alloc.allocated_seats - _alloc.effective_demand_seats
+                    _fl_used = len(_unit_floors.get(_alloc.unit_name, set()))
+                    _ideal = max(1, _alloc.allocated_seats / 120)
+                    _alloc.fragmentation_score = (
+                        min(1.0, (_fl_used / _ideal - 1) / 3) if _alloc.allocated_seats > 0 else 0.0
+                    )
+                scenario.floor_assignments = result.assignments
+                scenario.last_run_at = datetime.now()
                 update_scenario(scenario)
                 add_audit_entry(
                     "accept_optimization", scenario.scenario_id,
@@ -787,7 +649,6 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
         with st.expander("Download Report", expanded=False):
             from datetime import date as _date
             from engine.report_generator import generate_scenario_report
-            from engine.pdf_report_generator import generate_pdf_report
             from data.session_store import get_daily_attendance_df
 
             _daily_df = get_daily_attendance_df()
@@ -808,21 +669,10 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
             _report_cache_key = f"{scenario.scenario_id}_{scenario.last_run_at}"
             if st.session_state.get("_wi_report_key") != _report_cache_key:
                 st.session_state.pop("_wi_report_xlsx", None)
-                st.session_state.pop("_wi_report_pdf", None)
 
             if st.button("Prepare Scenario Report", key="btn_whatif_prep", use_container_width=True):
-                with st.spinner("Generating reports…"):
+                with st.spinner("Generating report…"):
                     st.session_state["_wi_report_xlsx"] = generate_scenario_report(
-                        scenario=scenario,
-                        floors=raw_floors,
-                        units=units,
-                        attendance_map=_att_rpt,
-                        rule_config=get_rule_config(),
-                        opt_history=_opt_hist if _opt_hist else None,
-                        daily_attendance_df=_daily_df,
-                        matrix_results=_matrix,
-                    )
-                    st.session_state["_wi_report_pdf"] = generate_pdf_report(
                         scenario=scenario,
                         floors=raw_floors,
                         units=units,
@@ -835,27 +685,16 @@ Typical flow: set overrides → **Run Policy Simulation** → review demand → 
                     st.session_state["_wi_report_key"] = _report_cache_key
 
             if "_wi_report_xlsx" in st.session_state:
-                _dl_c1, _dl_c2 = st.columns(2)
-                with _dl_c1:
-                    st.download_button(
-                        label="Download Scenario Report (.xlsx)",
-                        data=st.session_state["_wi_report_xlsx"],
-                        file_name=f"scenario_{scenario.name.replace(' ', '_')}_{_date.today()}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key="btn_whatif_dl_xlsx",
-                        use_container_width=True,
-                    )
-                with _dl_c2:
-                    st.download_button(
-                        label="Download Boardroom Report (.pdf)",
-                        data=st.session_state["_wi_report_pdf"],
-                        file_name=f"scenario_{scenario.name.replace(' ', '_')}_{_date.today()}.pdf",
-                        mime="application/pdf",
-                        key="btn_whatif_dl_pdf",
-                        use_container_width=True,
-                    )
+                st.download_button(
+                    label="Download Scenario Report (.xlsx)",
+                    data=st.session_state["_wi_report_xlsx"],
+                    file_name=f"scenario_{scenario.name.replace(' ', '_')}_{_date.today()}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="btn_whatif_dl_xlsx",
+                    use_container_width=True,
+                )
             else:
-                st.caption("Click **Prepare Scenario Report** to generate the downloadable files.")
+                st.caption("Click **Prepare Scenario Report** to generate the Excel report.")
 
     st.divider()
 

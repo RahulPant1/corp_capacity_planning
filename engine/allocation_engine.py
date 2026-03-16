@@ -185,11 +185,18 @@ def compute_all_allocations(
     horizon_months: int,
     rule_config: Optional[dict] = None,
 ) -> List[AllocationRecommendation]:
-    """Compute allocation for all units: attendance-based when data available, flat % fallback."""
+    """Compute allocation for all units.
+
+    In "simple" mode (default): always uses flat global_alloc_pct via compute_simple_allocation,
+    even when attendance data is present.
+    In "advanced" mode: uses attendance-based formula when attendance data is available.
+    """
+    cfg = rule_config or {}
+    allocation_mode = cfg.get("allocation_mode", ALLOCATION_MODE)  # "simple" or "advanced"
     results = []
     for unit in units:
         att = attendance_map.get(unit.unit_name) if attendance_map else None
-        if att:
+        if att and allocation_mode != "simple":
             results.append(compute_recommended_allocation(unit, att, horizon_months, rule_config))
         else:
             results.append(compute_simple_allocation(unit, horizon_months, rule_config))

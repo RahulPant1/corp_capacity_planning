@@ -97,7 +97,7 @@ HW_MIN_PERIODS = 12                                   # Min observations to atte
 HW_SEASONAL_PERIODS = 5                               # Business week (Mon-Fri)
 
 # ── Scenario Comparison Matrix ───────────────────────────────────────────
-COMPARISON_MAX_COMBINATIONS = 24
+COMPARISON_MAX_COMBINATIONS = 12
 COMPARISON_ALLOC_OPTIONS = [0.60, 0.70, 0.80, 0.90, 1.00]
 COMPARISON_RTO_OPTIONS = [2.0, 2.5, 3.0, 3.5, 4.0]
 COMPARISON_CAPRED_OPTIONS = [0.0, 0.05, 0.10, 0.15, 0.20]

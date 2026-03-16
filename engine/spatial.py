@@ -101,6 +101,9 @@ def assign_units_to_floors(
 
     floor_map = {f.floor_id: f for f in floors}
 
+    # Pre-build floor→cluster set for O(1) lookup; updated incrementally as assignments are placed
+    floor_clusters: Dict[tuple, set] = {}  # (tower_id, floor_number) → set of cluster_ids
+
     # Sort units by allocated seats descending (place large units first)
     sorted_allocs = sorted(allocations, key=lambda a: a.allocated_seats, reverse=True)
 
@@ -128,14 +131,9 @@ def assign_units_to_floors(
                         continue
                 s = score_floor_for_unit(f, remaining, assignments, unit_name, floors_used)
 
-                # Cluster diversity adjustment: bonus for cross-cluster, penalty for same-cluster
+                # Cluster diversity adjustment: O(1) lookup via pre-built floor_clusters dict
                 if cluster_map and unit_cid is not None:
-                    clusters_on_floor = {
-                        cluster_map.get(a.unit_name)
-                        for a in assignments
-                        if a.tower_id == f.tower_id and a.floor_number == f.floor_number
-                        and cluster_map.get(a.unit_name) is not None
-                    }
+                    clusters_on_floor = floor_clusters.get((f.tower_id, f.floor_number), set())
                     if clusters_on_floor:
                         if unit_cid not in clusters_on_floor:
                             s += diversity_weight        # cross-cluster placement → bonus
@@ -162,6 +160,10 @@ def assign_units_to_floors(
                 seats_assigned=seats_on_floor,
                 adjacency_tier=tier,
             ))
+
+            # Update floor_clusters incrementally — O(1) per assignment
+            if cluster_map and unit_cid is not None:
+                floor_clusters.setdefault((f.tower_id, f.floor_number), set()).add(unit_cid)
 
             floor_remaining[best_floor_id] -= seats_on_floor
             seats_to_place -= seats_on_floor

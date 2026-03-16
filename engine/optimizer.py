@@ -124,9 +124,8 @@ def optimize_allocation(
         elif objective == "rto_whatif" and u in att_map and target_rto_days is not None:
             demand[u] = _compute_rto_demand(att_map[u], buffer_mult, override_rto=target_rto_days)
         else:
-            # Use physical_demand (hot-seating adjusted) if available, else effective_demand
-            alloc = alloc_map[u]
-            demand[u] = alloc.physical_demand if alloc.physical_demand > 0 else alloc.effective_demand_seats
+            # optimal_placement: use effective_demand_seats (respects global_alloc_pct × projected HC)
+            demand[u] = alloc_map[u].effective_demand_seats
 
     prob = pulp.LpProblem("SeatAllocation", pulp.LpMinimize)
 
@@ -231,7 +230,7 @@ def optimize_allocation(
                 guaranteed_units.append(u)
 
     # --- Solve ---
-    prob.solve(pulp.PULP_CBC_CMD(msg=0, timeLimit=30))
+    prob.solve(pulp.PULP_CBC_CMD(msg=0, timeLimit=10))
     status = pulp.LpStatus[prob.status]
     relaxed_guarantee = False
 
@@ -241,7 +240,7 @@ def optimize_allocation(
             cname = f"minguarantee_{u}"
             if cname in prob.constraints:
                 del prob.constraints[cname]
-        prob.solve(pulp.PULP_CBC_CMD(msg=0, timeLimit=30))
+        prob.solve(pulp.PULP_CBC_CMD(msg=0, timeLimit=10))
         status = pulp.LpStatus[prob.status]
         relaxed_guarantee = True
 

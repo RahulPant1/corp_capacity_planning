@@ -103,10 +103,10 @@ def generate_daily_attendance_df(days: int = 90, seed: int = 42) -> pd.DataFrame
     import numpy as np
     rng = np.random.RandomState(seed)
 
-    unit_base = {
-        "Engineering": 280, "Product": 105, "Sales": 180, "Marketing": 80,
-        "Finance": 55, "HR": 40, "Legal": 28, "Operations": 140,
-    }
+    # Derive daily base counts from attendance profile medians for numerical consistency.
+    # This ensures daily distribution anchors to the same numbers used in Scenario / Unit views.
+    _att_df = generate_attendance_df()
+    unit_base = dict(zip(_att_df["Unit Name"], _att_df["Monthly Median In-Office Strength"]))
 
     dow_multipliers = {
         0: 0.85,  # Monday

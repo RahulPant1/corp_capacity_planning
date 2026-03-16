@@ -204,30 +204,40 @@ def render(sidebar_state):
         f"Last run: {scenario.last_run_at.strftime('%b %d, %H:%M') if scenario.last_run_at else 'Not yet run'}"
     )
 
-    # Optimizer constraints badge (when Accept & Apply has been used)
+    # --- Active Planning Constraints ---
     _p = scenario.params
-    _obj_labels = {"optimal_placement": "Optimal Placement", "rto_based": "RTO-Based", "rto_whatif": "What-If RTO"}
-    _constraint_parts = []
+    _obj_labels = {
+        "optimal_placement": "Optimal Placement",
+        "rto_based": "RTO-Based",
+        "rto_whatif": "What-If RTO",
+    }
+    _cparts = []
     if _p.optimizer_objective:
-        _constraint_parts.append(f"Mode: **{_obj_labels.get(_p.optimizer_objective, _p.optimizer_objective)}**")
+        _cparts.append(f"**Mode:** {_obj_labels.get(_p.optimizer_objective, _p.optimizer_objective)}")
+    if _p.excluded_floors:
+        _cparts.append(f"**Excluded floors:** {len(_p.excluded_floors)} ({', '.join(_p.excluded_floors)})")
+    if _p.capacity_reduction_pct > 0:
+        _cparts.append(f"**Capacity reduction:** {_p.capacity_reduction_pct:.0%}")
+    if _p.global_rto_mandate_days is not None:
+        _cparts.append(f"**RTO mandate:** {_p.global_rto_mandate_days} days/wk")
     if _p.max_floors_per_unit:
-        _constraint_parts.append(f"Max {_p.max_floors_per_unit} floor(s)/unit")
-    if _p.capacity_reduction_pct:
-        _constraint_parts.append(f"Capacity −{_p.capacity_reduction_pct:.0%}")
+        _cparts.append(f"**Max floors/unit:** {_p.max_floors_per_unit}")
     if _p.pinned_tower_ids:
-        _constraint_parts.append(f"Tower restrictions: {len(_p.pinned_tower_ids)} unit(s)")
-    if _constraint_parts:
-        st.caption("⚙️ Optimization constraints applied: " + " · ".join(_constraint_parts))
+        _pin_detail = "; ".join(f"{u} → {'+'.join(v)}" for u, v in _p.pinned_tower_ids.items())
+        _cparts.append(f"**Tower restrictions:** {len(_p.pinned_tower_ids)} unit(s) ({_pin_detail})")
+    if scenario.unit_overrides:
+        _cparts.append(f"**Unit overrides:** {len(scenario.unit_overrides)} unit(s)")
 
-    # Scenario adjustment info
-    if has_scenario_adjustments:
-        notes = []
-        if scenario.params.excluded_floors:
-            notes.append(f"{len(scenario.params.excluded_floors)} floors excluded ({', '.join(scenario.params.excluded_floors)})")
-        if scenario.params.capacity_reduction_pct > 0:
-            notes.append(f"{scenario.params.capacity_reduction_pct:.0%} capacity reduction applied")
-        st.info(f"Scenario adjustments: {'; '.join(notes)}. "
-                f"Effective supply is {effective_total_seats:,} seats (base: {raw_total_seats:,}).")
+    if _cparts:
+        st.info("⚙️ **Active Scenario Constraints:** " + " · ".join(_cparts))
+    elif has_scenario_adjustments:
+        _adj_notes = []
+        if _p.excluded_floors:
+            _adj_notes.append(f"{len(_p.excluded_floors)} floors excluded")
+        if _p.capacity_reduction_pct > 0:
+            _adj_notes.append(f"{_p.capacity_reduction_pct:.0%} capacity reduction")
+        st.info(f"Scenario adjustments: {'; '.join(_adj_notes)}. "
+                f"Effective supply {effective_total_seats:,} seats (base: {raw_total_seats:,}).")
 
     st.divider()
 
@@ -551,12 +561,25 @@ def render(sidebar_state):
         return _daily_df, _unit_names, _stf_results, _alert_days, _dow_df, _conflict, _peak_data, _breach_data, _clusters
 
     if scenario and scenario.allocation_results:
+        # Cache key: invalidate when scenario or daily data changes
+        _daily_df_tmp = get_daily_attendance_df()
+        _hol_data_key = f"{scenario.scenario_id}_{scenario.last_run_at}_{len(_daily_df_tmp) if _daily_df_tmp is not None else 0}"
+        if st.session_state.get("_holistic_data_key") != _hol_data_key:
+            st.session_state.pop("_holistic_data_cache", None)
+
+        def _get_holistic_data():
+            """Return cached holistic data, computing only if needed."""
+            if "_holistic_data_cache" not in st.session_state:
+                st.session_state["_holistic_data_cache"] = _compute_holistic_data()
+                st.session_state["_holistic_data_key"] = _hol_data_key
+            return st.session_state["_holistic_data_cache"]
+
         _hol_col1, _hol_col2 = st.columns(2)
         with _hol_col1:
             if st.button("Prepare Excel Report", key="btn_holistic_xl", use_container_width=True):
                 with st.spinner("Building holistic Excel report…"):
                     try:
-                        _h_daily_df, _h_unit_names, _h_stf, _h_alert, _h_dow, _h_conflict, _h_peak, _h_breach, _h_clusters = _compute_holistic_data()
+                        _h_daily_df, _h_unit_names, _h_stf, _h_alert, _h_dow, _h_conflict, _h_peak, _h_breach, _h_clusters = _get_holistic_data()
                         from engine.holistic_report_generator import generate_holistic_report
                         _xl_bytes = generate_holistic_report(
                             scenario=scenario,
@@ -593,7 +616,7 @@ def render(sidebar_state):
             if st.button("Prepare PDF Report", key="btn_holistic_pdf", use_container_width=True):
                 with st.spinner("Building holistic PDF report…"):
                     try:
-                        _h_daily_df, _h_unit_names, _h_stf, _h_alert, _h_dow, _h_conflict, _h_peak, _h_breach, _h_clusters = _compute_holistic_data()
+                        _h_daily_df, _h_unit_names, _h_stf, _h_alert, _h_dow, _h_conflict, _h_peak, _h_breach, _h_clusters = _get_holistic_data()
                         from engine.holistic_pdf_report_generator import generate_holistic_pdf_report
                         _pdf_bytes = generate_holistic_pdf_report(
                             scenario=scenario,

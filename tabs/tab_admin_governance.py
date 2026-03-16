@@ -468,31 +468,8 @@ def render(sidebar_state):
                 step=0.05, key="cfg_max_alloc",
             )
 
-    # Planning Buffer — controls validation sensitivity
-    planning_buffer_level = config.get("planning_buffer_level", DEFAULT_PLANNING_BUFFER)
-
-    buffer_labels = {
-        "lean": "Lean — tighter validation, plan for typical attendance",
-        "balanced": "Balanced — standard buffer for peak days (default)",
-        "conservative": "Conservative — extra cushion for worst-case attendance",
-    }
-    planning_buffer_level = st.radio(
-        "Planning Buffer",
-        options=list(buffer_labels.keys()),
-        format_func=lambda k: buffer_labels[k],
-        index=list(buffer_labels.keys()).index(planning_buffer_level)
-              if planning_buffer_level in buffer_labels else 1,
-        key="cfg_planning_buffer",
-        help="Controls how much headroom is expected in post-allocation validation. "
-             "Lean = minimal buffer, Conservative = maximum buffer. "
-             "Attendance data (Median HC, Max HC, RTO) is always used.",
-    )
-    st.caption(
-        "Planning Buffer controls how peak attendance is weighted in RTO-based validation "
-        "(Dashboard alerts, What-If Analysis RTO Status, and RTO-Based optimization). "
-        "The **Sensitivity Analysis** in the Optimization tab shows how seat demand varies "
-        "across all three presets without changing this global setting."
-    )
+    # Planning Buffer hardcoded to balanced
+    planning_buffer_level = "balanced"
 
     # RTO Utilization Alert Threshold
     rto_util_threshold_int = st.slider(

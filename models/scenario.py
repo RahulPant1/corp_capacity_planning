@@ -22,6 +22,7 @@ class ScenarioParams:
     optimizer_objective: Optional[str] = None    # "optimal_placement" | "rto_based" | "rto_whatif"
     max_floors_per_unit: Optional[int] = None
     pinned_tower_ids: Optional[dict] = None      # {unit_name: [tower_id, ...]}
+    min_guarantee_pct: Optional[float] = None    # Each unit gets at least this fraction of its demand
 
 
 @dataclass

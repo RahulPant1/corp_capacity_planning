@@ -222,6 +222,8 @@ def render(sidebar_state):
         _cparts.append(f"**RTO mandate:** {_p.global_rto_mandate_days} days/wk")
     if _p.max_floors_per_unit:
         _cparts.append(f"**Max floors/unit:** {_p.max_floors_per_unit}")
+    if _p.min_guarantee_pct:
+        _cparts.append(f"**Min seat guarantee:** {_p.min_guarantee_pct:.0%} of demand per unit")
     if _p.pinned_tower_ids:
         _pin_detail = "; ".join(f"{u} → {'+'.join(v)}" for u, v in _p.pinned_tower_ids.items())
         _cparts.append(f"**Tower restrictions:** {len(_p.pinned_tower_ids)} unit(s) ({_pin_detail})")

@@ -23,6 +23,7 @@ from config.defaults import (
     COMPARISON_OBJECTIVES,
     RISK_RED_GAP_PCT, RISK_AMBER_GAP_PCT,
     RISK_RED_FRAGMENTATION, RISK_AMBER_FRAGMENTATION,
+    PEAK_BUFFER_MULTIPLIER,
 )
 from models.scenario import ScenarioParams, ScenarioOverride
 
@@ -399,6 +400,8 @@ Results are previewed before committing — click **Accept & Apply** to push cha
             "alloc_pct": rc_combined["global_alloc_pct"],
             "rto_mandate": rto_mandate_val,
             "target_rto": target_rto_for_opt,
+            "min_guarantee_pct": min_guar_val,
+            "excluded_floors": wi_excluded_floors,
             "cap_red": wi_cap_red_pct / 100.0,
         }
 
@@ -432,7 +435,6 @@ Results are previewed before committing — click **Accept & Apply** to push cha
             # delta reflects the actual change in seat need (not just alloc-engine output)
             _stored_target_rto = last_params.get("target_rto")
             _obj = last_params.get("objective")
-            from config.defaults import PEAK_BUFFER_MULTIPLIER
             if _obj in ("rto_whatif", "rto_based"):
                 _att_map_wi = {a.unit_name: a for a in get_attendance()}
                 _, _att_map_wi = apply_overrides(units, _att_map_wi, last_sim)
@@ -615,10 +617,11 @@ Results are previewed before committing — click **Accept & Apply** to push cha
                 scenario.params = ScenarioParams(
                     global_rto_mandate_days=lrp.get("rto_mandate"),
                     capacity_reduction_pct=lrp.get("cap_red", 0.0),
-                    excluded_floors=scenario.params.excluded_floors,
+                    excluded_floors=lrp.get("excluded_floors", scenario.params.excluded_floors),
                     optimizer_objective=lrp.get("objective", selected_obj),
                     max_floors_per_unit=max_floors_val if max_floors_val != 3 else None,
                     pinned_tower_ids=pinned_tower_ids if pinned_tower_ids else None,
+                    min_guarantee_pct=lrp.get("min_guarantee_pct"),
                 )
                 # Update effective_demand_seats with new params without re-running spatial assignment
                 from engine.allocation_engine import compute_all_allocations
@@ -626,6 +629,21 @@ Results are previewed before committing — click **Accept & Apply** to push cha
                 _units_m, _att_m = apply_overrides(units, att_map_raw, scenario)
                 _new_recs = compute_all_allocations(_units_m, _att_m, scenario.planning_horizon_months, rc)
                 _demand_map = {a.unit_name: a.effective_demand_seats for a in _new_recs}
+                # For RTO modes override demand to match what the LP actually used,
+                # so effective_demand_seats stored in the scenario is attendance-based
+                # and all tabs (Dashboard, Unit Impact) show correct Demand / Gap.
+                _lrp_obj = lrp.get("objective", selected_obj)
+                if _lrp_obj in ("rto_based", "rto_whatif"):
+                    _override_rto = lrp.get("target_rto") if _lrp_obj == "rto_whatif" else None
+                    _demand_map = {
+                        a.unit_name: _compute_rto_demand(
+                            _att_m[a.unit_name],
+                            PEAK_BUFFER_MULTIPLIER,
+                            override_rto=_override_rto,
+                        )
+                        for a in _new_recs
+                        if a.unit_name in _att_m
+                    }
                 # Compute fragmentation from optimizer assignments (O(assignments), fast)
                 _unit_floors: _defaultdict = _defaultdict(set)
                 for _a in result.assignments:

@@ -170,7 +170,7 @@ Central planning and optimization hub:
 **Single "Run & Optimize" button** — applies all overrides, reruns the policy allocation, then LP-optimizes floor assignments.
 
 **Results panel:**
-- Planning Impact vs baseline (demand delta, capacity delta, headroom)
+- Planning Impact vs baseline (demand delta, capacity delta, headroom). Demand delta is mode-aware: Optimal Placement uses alloc% × HC; RTO-Based uses pure attendance demand (same basis as the LP); What-If RTO uses attendance scaled to the target RTO days — so the delta always reflects the real change in seat need, not just an alloc-engine artefact.
 - Before/After table (per-unit seats, floor count, buildings used)
 - Savings Summary for RTO-based modes (seats saved, floors freed)
 - Consolidation suggestions
@@ -192,7 +192,7 @@ Both views include a floor detail table, building spread analysis, and consolida
 
 ### Tab 4 — 👥 Unit Impact View
 
-Per-unit risk table with 🔴/🟡/🟢 summary cards. Filter by priority, risk level, or unit name. Columns: current/projected HC, recommended alloc %, effective demand, allocated seats, gap, fragmentation score, risk level, RTO status.
+Per-unit risk table with 🔴/🟡/🟢 summary cards. Filter by priority, risk level, or unit name. Columns: current/projected HC, recommended alloc %, effective demand, allocated seats, gap, fragmentation score, risk level, RTO status. A warning banner appears when a What-If result is pending (not yet accepted) — values reflect the last accepted run until Accept & Apply is clicked.
 
 ### Tab 5 — 📈 Demand Analytics
 

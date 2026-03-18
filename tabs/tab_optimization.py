@@ -10,7 +10,7 @@ from data.session_store import (
     get_attendance, get_cluster_map,
     update_scenario, add_audit_entry, is_data_loaded,
 )
-from engine.optimizer import optimize_allocation
+from engine.optimizer import optimize_allocation, _compute_rto_demand
 from engine.scenario_engine import apply_floor_modifications, apply_overrides, run_scenario
 from engine.scenario_comparison import run_scenario_matrix, rank_scenarios, get_best_scenario, build_explanation
 from components.tables import render_comparison_table
@@ -398,6 +398,7 @@ Results are previewed before committing — click **Accept & Apply** to push cha
             "objective": selected_obj,
             "alloc_pct": rc_combined["global_alloc_pct"],
             "rto_mandate": rto_mandate_val,
+            "target_rto": target_rto_for_opt,
             "cap_red": wi_cap_red_pct / 100.0,
         }
 
@@ -424,15 +425,35 @@ Results are previewed before committing — click **Accept & Apply** to push cha
 
         # --- Planning Impact metrics (demand + capacity delta vs baseline) ---
         if last_sim:
+            last_params = st.session_state.get("last_run_params", {})
             baseline_demand = sum(a.effective_demand_seats for a in scenario.allocation_results)
-            new_demand = sum(a.effective_demand_seats for a in last_sim.allocation_results)
+
+            # For RTO What-If, recompute demand using the overridden RTO so the
+            # delta reflects the actual change in seat need (not just alloc-engine output)
+            _stored_target_rto = last_params.get("target_rto")
+            _obj = last_params.get("objective")
+            from config.defaults import PEAK_BUFFER_MULTIPLIER
+            if _obj in ("rto_whatif", "rto_based"):
+                _att_map_wi = {a.unit_name: a for a in get_attendance()}
+                _, _att_map_wi = apply_overrides(units, _att_map_wi, last_sim)
+                new_demand = sum(
+                    _compute_rto_demand(
+                        _att_map_wi[a.unit_name],
+                        PEAK_BUFFER_MULTIPLIER,
+                        override_rto=_stored_target_rto if _obj == "rto_whatif" else None,
+                    )
+                    for a in last_sim.allocation_results
+                    if a.unit_name in _att_map_wi
+                )
+            else:
+                new_demand = sum(a.effective_demand_seats for a in last_sim.allocation_results)
             new_eff_floors = apply_floor_modifications(raw_floors, last_sim)
             new_cap = sum(f.total_seats for f in new_eff_floors)
             demand_delta = new_demand - baseline_demand
             cap_delta = new_cap - effective_total
             headroom = new_cap - new_demand
 
-            if demand_delta != 0 or cap_delta != 0:
+            if demand_delta != 0 or cap_delta != 0 or _obj in ("rto_whatif", "rto_based"):
                 st.markdown("**Planning Impact** (vs current baseline)")
                 m1, m2, m3 = st.columns(3)
                 m1.metric(

@@ -61,6 +61,20 @@ def render(sidebar_state):
         f"Last run: {scenario.last_run_at.strftime('%b %d, %H:%M') if scenario.last_run_at else 'Not yet run'}"
     )
 
+    # Warn if a what-if result is pending but not yet accepted
+    if st.session_state.get("optimization_result") and st.session_state.get("last_sim_scenario"):
+        _lp = st.session_state.get("last_run_params", {})
+        _obj_label = {
+            "optimal_placement": "Optimal Placement",
+            "rto_whatif": "What-If RTO",
+            "rto_based": "RTO-Based",
+        }.get(_lp.get("objective", ""), "What-If")
+        st.warning(
+            f"⚠️ A **{_obj_label}** result is pending — Allocated and Demand values below "
+            f"reflect the **last accepted run**. "
+            f"Go to **What-If Analysis → Accept & Apply** to update this view."
+        )
+
     allocations = scenario.allocation_results
     assignments = scenario.floor_assignments
     units = get_units()

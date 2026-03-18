@@ -333,9 +333,20 @@ def apply_scenario_adjustments(
     date_range: Tuple,
     adjustments: Dict[str, bool],
     custom_factor_pct: float = 0.0,
+    scope: str = "all",
+    scope_values: Optional[List[str]] = None,
+    # Deprecated: use scope + scope_values instead
     building_filter: Optional[List[str]] = None,
     lob_filter: Optional[List[str]] = None,
 ) -> pd.DataFrame:
+    # Backward-compat: map old params to new scope model
+    if building_filter and scope == "all":
+        scope = "buildings"
+        scope_values = building_filter
+    elif lob_filter and scope == "all":
+        scope = "lob"
+        scope_values = lob_filter
+
     df = daily_df.copy()
     start_ts = pd.Timestamp(date_range[0])
     end_ts = pd.Timestamp(date_range[1])
@@ -348,14 +359,112 @@ def apply_scenario_adjustments(
         combined_mult *= 1.0 + custom_factor_pct / 100.0
 
     mask = (df["date"] >= start_ts) & (df["date"] <= end_ts)
-    if building_filter:
-        mask &= df["building_id"].isin(building_filter)
-    if lob_filter:
-        mask &= df["lob"].isin(lob_filter)
+    if scope == "buildings" and scope_values:
+        mask &= df["building_id"].isin(scope_values)
+    elif scope == "lob" and scope_values:
+        mask &= df["lob"].isin(scope_values)
+    # scope == "all" or empty scope_values → no additional filter
 
     df.loc[mask, "footfall"] = (df.loc[mask, "footfall"] * combined_mult).round().astype(int).clip(lower=0)
     df["utilization_pct"] = (df["footfall"] / df["capacity"]).clip(upper=1.30)
     return df
+
+
+def compute_live_insights(
+    baseline_df: pd.DataFrame,
+    scenario_df: pd.DataFrame,
+    date_range: Tuple,
+    scope: str = "all",
+    scope_values: Optional[List[str]] = None,
+    capacity_threshold: float = 0.90,
+) -> List[str]:
+    """Generate live quantified impact bullets for Mode A event adjustments."""
+    start_ts = pd.Timestamp(date_range[0])
+    end_ts = pd.Timestamp(date_range[1])
+
+    base_win = baseline_df[(baseline_df["date"] >= start_ts) & (baseline_df["date"] <= end_ts)]
+    scen_win = scenario_df[(scenario_df["date"] >= start_ts) & (scenario_df["date"] <= end_ts)]
+
+    if base_win.empty:
+        return ["ℹ️ No data in the selected event period."]
+
+    base_total = int(base_win["footfall"].sum())
+    scen_total = int(scen_win["footfall"].sum())
+    delta = scen_total - base_total
+
+    if delta == 0:
+        return ["ℹ️ No adjustments active — select an event or set a custom factor to see impact."]
+
+    insights = []
+
+    # 1. Total footfall delta
+    direction = "adds" if delta > 0 else "reduces"
+    insights.append(
+        f"📊 This scenario **{direction} {abs(delta):,} total footfall** over the event period"
+    )
+
+    # 2. Additional peak-risk days
+    base_daily = base_win.groupby("date").agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
+    scen_daily = scen_win.groupby("date").agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
+    base_daily["util"] = base_daily["footfall"] / base_daily["capacity"]
+    scen_daily["util"] = scen_daily["footfall"] / scen_daily["capacity"]
+    base_risk_days = int((base_daily["util"] > capacity_threshold).sum())
+    scen_risk_days = int((scen_daily["util"] > capacity_threshold).sum())
+    risk_delta = scen_risk_days - base_risk_days
+    pct_label = int(capacity_threshold * 100)
+    if risk_delta > 0:
+        insights.append(
+            f"⚠️ **{risk_delta} additional peak-risk day{'s' if risk_delta != 1 else ''}** "
+            f"(>{pct_label}% capacity) — up from {base_risk_days} baseline"
+        )
+    elif risk_delta < 0:
+        insights.append(
+            f"✅ **{abs(risk_delta)} fewer peak-risk day{'s' if abs(risk_delta) != 1 else ''}** "
+            f"(>{pct_label}% capacity) — down from {base_risk_days} baseline"
+        )
+    else:
+        insights.append(
+            f"ℹ️ Peak-risk days unchanged at **{base_risk_days}** day{'s' if base_risk_days != 1 else ''} (>{pct_label}% capacity)"
+        )
+
+    # 3. Avg daily footfall change
+    window_days = base_daily.shape[0]
+    if window_days > 0:
+        avg_delta = delta / window_days
+        insights.append(
+            f"📅 Avg daily footfall change: **{avg_delta:+,.0f} seats/day** over {window_days} event day{'s' if window_days != 1 else ''}"
+        )
+
+    # 4. Top impacted building
+    per_bldg_base = base_win.groupby(["building_id", "building_name"])["footfall"].sum()
+    per_bldg_scen = scen_win.groupby(["building_id", "building_name"])["footfall"].sum()
+    diff = per_bldg_scen - per_bldg_base
+    if not diff.empty and diff.abs().max() > 0:
+        top_idx = diff.abs().idxmax()
+        top_diff = diff[top_idx]
+        top_base = per_bldg_base.get(top_idx, 0)
+        top_name = top_idx[1] if isinstance(top_idx, tuple) else str(top_idx)
+        if top_base > 0:
+            top_pct = top_diff / top_base * 100
+            insights.append(
+                f"🏢 Top impacted building: **{top_name}** ({top_pct:+.0f}%, {top_diff:+,.0f} seats)"
+            )
+
+    # 5. Scope coverage (only when narrowed)
+    total_buildings = baseline_df["building_id"].nunique()
+    if scope == "buildings" and scope_values:
+        scoped_n = len([v for v in scope_values if v in baseline_df["building_id"].unique()])
+        insights.append(
+            f"🎯 Adjustment applies to **{scoped_n} of {total_buildings} building{'s' if total_buildings != 1 else ''}**"
+        )
+    elif scope == "lob" and scope_values:
+        scoped_bldgs = baseline_df[baseline_df["lob"].isin(scope_values)]["building_id"].nunique()
+        lob_str = ", ".join(scope_values[:3]) + ("…" if len(scope_values) > 3 else "")
+        insights.append(
+            f"🎯 Adjustment applies to **{scoped_bldgs} of {total_buildings} building{'s' if total_buildings != 1 else ''}** (LoB: {lob_str})"
+        )
+
+    return insights
 
 
 def compute_scenario_kpis(
@@ -366,19 +475,29 @@ def compute_scenario_kpis(
     start_ts = pd.Timestamp(date_range[0])
     end_ts = pd.Timestamp(date_range[1])
 
-    def total(df):
-        return int(
-            df[(df["date"] >= start_ts) & (df["date"] <= end_ts)]
-            .groupby("date")["footfall"].sum()
-            .sum()
-        )
+    def _totals(df, weekdays_only=False):
+        sliced = df[(df["date"] >= start_ts) & (df["date"] <= end_ts)]
+        if weekdays_only:
+            sliced = sliced[sliced["date"].dt.dayofweek < 5]
+        return sliced.groupby("date")["footfall"].sum()
 
-    baseline_total = total(baseline_df)
-    scenario_total = total(scenario_df)
+    base_all = _totals(baseline_df, weekdays_only=False)
+    base_wday = _totals(baseline_df, weekdays_only=True)
+    scen_wday = _totals(scenario_df, weekdays_only=True)
+
+    baseline_total = int(base_all.sum())
+    scenario_total = int(_totals(scenario_df, weekdays_only=False).sum())
+    window_weekdays = int(base_wday.shape[0])
+    window_days = int(base_all.shape[0])
+
     return {
         "baseline_footfall": baseline_total,
         "scenario_footfall": scenario_total,
         "delta": scenario_total - baseline_total,
+        "baseline_avg_daily": round(base_wday.sum() / window_weekdays) if window_weekdays else 0,
+        "scenario_avg_daily": round(scen_wday.sum() / window_weekdays) if window_weekdays else 0,
+        "window_days": window_days,
+        "window_weekdays": window_weekdays,
     }
 
 

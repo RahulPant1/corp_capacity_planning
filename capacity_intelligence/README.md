@@ -1,6 +1,6 @@
 # Capacity Intelligence — Limited Version
 
-A standalone Streamlit app that transforms predictive footfall data into three actionable operational views for capacity planning teams.
+A standalone Streamlit app that transforms predictive footfall data into actionable operational views for capacity planning teams.
 
 ---
 
@@ -15,11 +15,11 @@ cd capacity_intelligence
 streamlit run app.py
 ```
 
-The app auto-loads sample data on startup — no configuration needed.
+On first launch, go to the **⚙️ Admin** tab and click **Load Sample Data** — this activates all tabs instantly.
 
 ---
 
-## Views
+## Tabs
 
 ### 1. Short-Term View (📅)
 Operational view for the next 30 or 60 days. Target audience: Regional Capacity Managers.
@@ -27,12 +27,21 @@ Operational view for the next 30 or 60 days. Target audience: Regional Capacity 
 | Component | Description |
 |---|---|
 | KPI row | Peak footfall, Avg daily footfall, Buildings >90% utilization, Buildings <60% utilization |
+| Building Risk Details | Expandable drilldown table — Building, City, LoB, Capacity, Peak Footfall, Avg Util %, Peak Util %, Risk label |
 | Insights panel | Auto-generated bullets — buildings near capacity, Friday dip, under-utilized offices |
 | Daily forecast chart | Total footfall vs capacity limit (red threshold line) |
 | Day-of-week bar chart | Avg utilization % by Mon–Sun; bars colored by risk level |
 | Capacity calendar | Month grid — cells colored Green (<75%), Amber (75–90%), Red (>90%) |
 
-Filters: City, Line of Business, Building. Toggle: 30/60-day horizon, Peak/Average metric.
+Filters: City, Line of Business, Building. Toggle: 30/60-day horizon.
+
+**Risk labels:**
+| Label | Condition |
+|---|---|
+| 🔴 Over Capacity | Peak utilization > 90% |
+| 🟡 Watch | Avg utilization > 75% |
+| 🔵 Under-utilized | Avg utilization < 60% |
+| 🟢 Healthy | Everything else |
 
 ---
 
@@ -59,36 +68,56 @@ Two modes selectable via radio button at top:
 #### Mode A — Event Impact
 *"What happens to footfall when a specific event occurs?"*
 
+- **Adjustment Scope** — apply adjustments to the whole portfolio, specific buildings, or a specific Line of Business
 - Pick an **event period** (date range) — only footfall within that window is adjusted
-- Select built-in adjustments:
-  - Corporate Events: Townhall (+20%), Leadership Visit (+15%)
-  - External Disruptions: Weather Alert (−30%), Traffic/Local Disruption (−20%)
-  - Calendar Anomalies: Mandatory Holiday (−90%), Optional Holiday (−40%), US Holiday (−25%)
+- Select built-in adjustments (combined multiplicatively):
+  - Corporate Events: Townhall (×1.20), Leadership Visit (×1.15)
+  - External Disruptions: Weather Alert (×0.70), Traffic/Local Disruption (×0.80)
+  - Calendar Anomalies: Mandatory Holiday (×0.10), Optional Holiday (×0.60), US Holiday (×0.75)
 - Custom factor: any % adjustment (positive or negative)
-- Output: Baseline vs scenario KPIs, wedge chart (divergence visualised), per-building impact table
+- Output: Baseline vs scenario avg daily footfall (seats/day), wedge chart, per-building impact table, live impact insights panel
+
+**KPI cards show avg weekday footfall (seats/day)** — same unit as the chart Y-axis. Total person-days impact shown as sub-caption.
 
 #### Mode B — Policy Simulation
 *"What happens if we change the RTO mandate or seat planning target?"*
 
-- **RTO Mandate slider** (1.0–5.0 days/week, baseline 3.5) — scales footfall proportionally across the full horizon
-- **Seat Planning Target %** (50–95%, default 80%) — determines seats needed = peak footfall ÷ target%
+- **RTO Mandate slider** (1.0–5.0 days/week, baseline 3.5) — scales footfall proportionally
+- **Seat Planning Target %** (50–95%, default 80%) — seats needed = peak footfall ÷ target%
 - **Horizon** toggle: 30 days / 60 days / 6 months
-- Output: Current vs policy demand KPIs, monthly footfall comparison chart, per-building seat gap table (Surplus/Deficit)
+- Output: Current vs policy demand KPIs, monthly footfall comparison chart, per-building seat gap table
+
+---
+
+### 4. Admin (⚙️)
+Data management tab. Load sample data or upload your own CSV here.
+
+- **Load Sample Data** — one-click load of the built-in 7-building synthetic dataset; activates all tabs immediately
+- **Upload CSV** — upload your own footfall file; CSV template download included
+- **Data Preview** — row count, date range, building count, first 20 rows, per-building summary with avg utilization
+
+---
+
+### 5. Help (📖)
+In-app reference guide covering:
+- Data model and column schema
+- How the horizon date slicing works (Short-Term vs Long-Term)
+- How the sample data forecast formula works (DOW multipliers, linear growth trend, noise)
+- Scenario Planner calculation details (Event multipliers, RTO scaling, seat gap formula)
+- Risk thresholds and utilization definitions
 
 ---
 
 ## Data Loading
 
-The sidebar (left panel) offers two options:
-
-### Sample Data (default)
+### Sample Data
 7 synthetic buildings across Bangalore, Hyderabad, Chennai, and Manila with realistic utilization profiles:
 - Mix of high-growth (Engineering, Product), stable (Sales, Finance), and declining (Operations) units
 - Intentionally includes buildings near capacity and under-utilized buildings for demo value
-- 365 days of daily footfall with DOW patterns, linear growth trend, and Gaussian noise
+- 365 days of daily footfall from today — DOW patterns, linear growth trend (per-building), Gaussian noise (seed=42)
 
 ### Upload Your Own CSV
-Click "Upload CSV" in the sidebar. The file must contain these columns:
+Go to the **⚙️ Admin** tab and select "Upload your CSV". The file must contain these columns:
 
 | Column | Type | Example |
 |---|---|---|
@@ -101,9 +130,43 @@ Click "Upload CSV" in the sidebar. The file must contain these columns:
 | `footfall` | integer | 412 |
 | `capacity` | integer | 500 |
 
-A **Download CSV template** button is available in the sidebar to get the correct column headers.
+Each row = one building on one day. A **Download CSV template** button is available in the Admin tab.
 
-Each row = one building on one day. For multi-building portfolios, include one row per building per day.
+---
+
+## How Calculations Work
+
+### Horizon slicing
+All views slice the loaded DataFrame to a date window starting from today. No extrapolation is performed.
+
+| View | Horizon | Date range |
+|---|---|---|
+| Short-Term | 30 days | `today ≤ date < today + 30` |
+| Short-Term | 60 days | `today ≤ date < today + 60` |
+| Long-Term | 6 months | `today ≤ date < today + 180` |
+| Long-Term | 12 months | `today ≤ date < today + 365` |
+
+All utilization and footfall KPIs use **weekdays only (Mon–Fri)**.
+
+### Sample data formula
+```
+footfall = base_demand × DOW_multiplier × trend_factor × noise
+
+base_demand    = base_utilization × capacity
+trend_factor   = 1.0 + annual_growth_rate × (day / 365)   ← linear ramp
+DOW_multiplier = Mon 0.85 · Tue 1.00 · Wed 1.00 · Thu 0.95 · Fri 0.75
+noise          = 1 + Normal(0, 0.08)  ← ±8%, seed=42
+```
+
+There is no statistical forecasting model (no ARIMA/Holt-Winters) in this version.
+
+### Scenario multipliers
+Multiple event adjustments combine multiplicatively:
+```
+combined_mult = mult_1 × mult_2 × … × (1 + custom_pct / 100)
+scenario_footfall = baseline_footfall × combined_mult
+  — applied only within the event date window AND the selected scope
+```
 
 ---
 
@@ -111,28 +174,24 @@ Each row = one building on one day. For multi-building portfolios, include one r
 
 ```
 capacity_intelligence/
-├── app.py                      # Streamlit entry point
+├── app.py                      # Streamlit entry point (all tab UI)
 ├── data/
 │   └── ci_sample_data.py       # Sample data generator (7 buildings, 365-day forecast)
 ├── engine/
 │   ├── capacity_forecast.py    # All forecast/analysis/chart functions
-│   ├── allocation_engine.py    # Seat allocation engine (from CPG planning tool)
-│   ├── optimizer.py            # LP optimizer (from CPG planning tool)
-│   ├── scenario_engine.py      # Scenario simulation engine (from CPG planning tool)
-│   └── spatial.py              # Floor assignment engine (from CPG planning tool)
+│   ├── allocation_engine.py    # Seat allocation engine
+│   ├── optimizer.py            # LP optimizer
+│   ├── scenario_engine.py      # Scenario simulation engine
+│   └── spatial.py              # Floor assignment engine
 ├── models/                     # Data models (Scenario, Unit, Floor, Attendance, etc.)
 ├── components/                 # Reusable UI components (charts, tables, metric cards)
 └── config/
     └── defaults.py             # Policy constants and thresholds
 ```
 
-The `engine/`, `models/`, `components/`, and `config/` subfolders were copied from the parent CPG planning tool and are now independent — changes here do not affect the parent app.
-
 ---
 
 ## Dependencies
-
-Uses the same Python environment as the parent CPG planning tool:
 
 ```
 streamlit
@@ -142,13 +201,14 @@ plotly
 pulp
 ```
 
-No additional packages required.
+No additional packages required beyond the parent CPG planning tool environment.
 
 ---
 
 ## Key Design Decisions
 
 - **Session-state only** — no database; all state lives in `st.session_state`
-- **Self-contained** — this folder has no runtime dependency on the parent `cpg_planning_tool/` codebase; it can be moved to its own repository
-- **Footfall-first** — the data model is building × day (not unit × month like the parent tool); all metrics derive from this daily footfall series
-- **Synthetic forecast** — sample data is generated deterministically (fixed seed) using DOW multipliers, linear growth trend, and Gaussian noise; re-running produces the same data
+- **Self-contained** — no runtime dependency on the parent `cpg_planning_tool/` codebase; can be moved to its own repository
+- **Footfall-first** — data model is building × day; all metrics derive from daily footfall
+- **Weekday-normalised averages** — all avg/peak KPIs exclude weekends for consistency
+- **Admin-gated data** — data loading is in the Admin tab; analytical tabs show a guard message until data is loaded

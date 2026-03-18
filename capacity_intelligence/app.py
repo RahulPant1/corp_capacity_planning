@@ -995,3 +995,75 @@ These thresholds are applied in:
 - Auto-generated Insights bullets
 - Long-Term insights ("projected to exceed 90% avg utilization by…")
 """)
+
+    with st.expander("6 · How Insights Are Generated", expanded=True):
+        st.markdown("""
+Insights are rule-based bullets generated automatically from the data — no AI or language model is involved.
+Each tab uses a different set of rules, threshold checks, and templates. All cap at **5 bullets maximum**.
+
+---
+
+#### Short-Term Insights
+
+Computed by `generate_insights_short_term()`. Runs over the selected horizon window (30 or 60 days), weekdays only.
+
+**Step 1 — Per-building stats computed:**
+```
+avg_util  = mean(footfall / capacity)  across all weekdays in window
+peak_util = max(footfall / capacity)   across all weekdays in window
+peak_date = date on which peak_util occurred
+```
+
+**Step 2 — Checks run in this priority order (first matches fill the 5-bullet cap):**
+
+| Priority | Check | Threshold | Template |
+|----------|-------|-----------|----------|
+| 1 (highest) | Over-capacity risk | avg_util ≥ **85%** | ⚠️ **{building}** projected at {X}% avg utilization — peak on {date} |
+| 2 | Friday vs Wednesday dip | Always shown if both DOW values exist | 📉 Friday footfall averages **{X}%** utilization vs **{Y}%** on Wednesday |
+| 3 | Under-utilized building | avg_util < **60%** | 📊 **{building}** under-utilized at {X}% average occupancy |
+| 4 (fallback) | No issues found | All above checks returned 0 results | ✅ All buildings within normal utilization range for this window. |
+
+Note: the over-capacity trigger here is avg ≥ **85%** (not 90%) — it fires earlier than the Risk label threshold to give advance warning.
+
+---
+
+#### Long-Term Insights
+
+Computed by `generate_insights_long_term()`. Runs over the full horizon (6 or 12 months), weekdays only, grouped by **calendar month**.
+
+**Step 1 — Per-building monthly utilization computed:**
+```
+monthly_util = mean(footfall / capacity)  across all weekdays in each month
+               (one value per building per month)
+```
+
+**Step 2 — Checks run in this priority order:**
+
+| Priority | Check | Threshold | Template |
+|----------|-------|-----------|----------|
+| 1 (highest) | Capacity breach forecast | monthly_util ≥ **90%** in any month | ⚠️ **{building}** projected to exceed 90% avg utilization by **{first breach month}** |
+| 2 | Consolidation candidate | overall avg monthly_util < **55%** | 📊 **{building}** projected at only {X}% avg utilization over {N} months — consider consolidation |
+| 3 (fallback) | No issues found | — | ✅ Portfolio capacity appears balanced over the forecast horizon. |
+
+For breach forecasts, only the **first month** the building is projected to breach is reported — not every month.
+
+Note: Long-Term uses **monthly avg ≥ 90%** (a month average exceeding 90%); Short-Term uses **daily avg ≥ 85%**. These are intentionally different — a full month averaging 90% is a more severe signal than a single-horizon daily average.
+
+---
+
+#### Scenario Planner — Live Impact Insights
+
+Computed by `compute_live_insights()`. Runs over the event date window, comparing baseline vs scenario DataFrames.
+Bullets are shown in **fixed sequence** (not conditional priority) whenever the delta is non-zero.
+
+| # | Always shown? | Calculation | Template |
+|---|---------------|-------------|----------|
+| 1 | Yes (if delta ≠ 0) | `sum(scenario_footfall) − sum(baseline_footfall)` in event window | 📊 This scenario **adds/reduces {X} total footfall** over the event period |
+| 2 | Yes | Count days where portfolio util > 90%, compare baseline vs scenario | ⚠️ **{N} additional peak-risk days** (>90% capacity) — up from {M} baseline |
+| 3 | Yes | `total_delta / weekday_count` | 📅 Avg daily footfall change: **{±X} seats/day** over {N} event days |
+| 4 | Yes (if any building impacted) | `argmax(abs(per_building_delta))` | 🏢 Top impacted building: **{name}** ({±X}%, {±Y} seats) |
+| 5 | Only when scope is narrowed | Count buildings/LoB matching scope | 🎯 Adjustment applies to **{N} of {M} buildings** |
+
+If no adjustment is active (all checkboxes off and custom % = 0), a single message is shown instead:
+> ℹ️ No adjustments active — select an event or set a custom factor to see impact.
+""")

@@ -26,6 +26,21 @@ SCENARIO_MULTIPLIERS: Dict[str, float] = {
 }
 
 # ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _total_capacity(df: pd.DataFrame) -> int:
+    """Sum capacity across all unique entities.
+
+    Tower-aware: when tower_id column is present each tower row carries its own
+    capacity, so we group by tower_id.  Falls back to building_id for flat data.
+    """
+    if "tower_id" in df.columns:
+        return int(df.groupby("tower_id")["capacity"].first().sum())
+    return int(df.groupby("building_id")["capacity"].first().sum())
+
+
+# ---------------------------------------------------------------------------
 # Filtering helpers
 # ---------------------------------------------------------------------------
 
@@ -84,7 +99,7 @@ def compute_portfolio_kpis(
     )
     peak_footfall = int(daily_totals["footfall"].max())
     avg_footfall = int(daily_totals["footfall"].mean())
-    total_capacity = int(df.groupby("building_id")["capacity"].first().sum())
+    total_capacity = _total_capacity(df)
 
     # Per-building utilisation stats
     bldg_daily = (
@@ -147,12 +162,15 @@ def compute_monthly_utilization(daily_df: pd.DataFrame) -> pd.DataFrame:
     df = daily_df[daily_df["date"].dt.dayofweek < 5].copy()
     df["year_month"] = df["date"].dt.to_period("M")
 
+    # Aggregate to building-day level first so tower rows are correctly summed
+    bldg_day = (
+        df.groupby(["year_month", "date", "building_id", "building_name"])
+        .agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
+        .reset_index()
+    )
     monthly = (
-        df.groupby(["year_month", "building_id", "building_name"])
-        .apply(lambda g: pd.Series({
-            "avg_footfall": g["footfall"].mean(),
-            "capacity": g["capacity"].iloc[0],
-        }))
+        bldg_day.groupby(["year_month", "building_id", "building_name"])
+        .agg(avg_footfall=("footfall", "mean"), capacity=("capacity", "first"))
         .reset_index()
     )
     monthly["util_pct"] = (monthly["avg_footfall"] / monthly["capacity"] * 100).clip(upper=120)
@@ -174,7 +192,7 @@ def compute_long_term_kpis(daily_df: pd.DataFrame, horizon_months: int = 12) -> 
     if weekday_df.empty:
         return {"avg_monthly_footfall": 0, "avg_util_pct": 0.0, "surplus_seats": 0, "buildings_below_50": 0, "total_capacity": 0}
 
-    total_cap = int(df.groupby("building_id")["capacity"].first().sum())
+    total_cap = _total_capacity(df)
 
     daily_totals = (
         weekday_df.groupby("date")
@@ -217,7 +235,7 @@ def compute_city_capacity_metrics(daily_df: pd.DataFrame, horizon_months: int = 
 
     records = []
     for city, grp in weekday_df.groupby("city"):
-        city_cap = grp.groupby("building_id")["capacity"].first().sum()
+        city_cap = _total_capacity(grp)
         daily_city = grp.groupby("date")["footfall"].sum()
         avg_daily = daily_city.mean()
         util_pct = round(avg_daily / city_cap * 100, 1)
@@ -245,13 +263,25 @@ def generate_insights_short_term(daily_df: pd.DataFrame, horizon_days: int = 30)
 
     insights = []
 
+    # Aggregate to building-day level first so tower rows are correctly summed
+    bldg_day = (
+        weekday_df.groupby(["date", "building_id", "building_name"])
+        .agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
+        .reset_index()
+    )
+    bldg_day["util"] = bldg_day["footfall"] / bldg_day["capacity"]
+
+    def _bldg_stats(g):
+        peak_idx = g["util"].idxmax()
+        return pd.Series({
+            "avg_util": g["util"].mean(),
+            "peak_util": g["util"].max(),
+            "peak_date": g.loc[peak_idx, "date"].strftime("%b %d"),
+        })
+
     bldg_stats = (
-        weekday_df.groupby(["building_id", "building_name"])
-        .apply(lambda g: pd.Series({
-            "avg_util": (g["footfall"] / g["capacity"]).mean(),
-            "peak_util": (g["footfall"] / g["capacity"]).max(),
-            "peak_date": g.loc[(g["footfall"] / g["capacity"]).idxmax(), "date"].strftime("%b %d"),
-        }))
+        bldg_day.groupby(["building_id", "building_name"])
+        .apply(_bldg_stats, include_groups=False)
         .reset_index()
     )
 
@@ -295,10 +325,17 @@ def generate_insights_long_term(daily_df: pd.DataFrame, horizon_months: int = 12
 
     insights = []
 
+    # Aggregate to building-day level first so tower rows are correctly summed
+    bldg_day_lt = (
+        weekday_df.groupby(["date", "building_id", "building_name", "year_month"])
+        .agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
+        .reset_index()
+    )
+    bldg_day_lt["util"] = bldg_day_lt["footfall"] / bldg_day_lt["capacity"]
     bldg_monthly = (
-        weekday_df.groupby(["building_id", "building_name", "year_month"])
-        .apply(lambda g: (g["footfall"] / g["capacity"]).mean())
-        .reset_index(name="monthly_util")
+        bldg_day_lt.groupby(["building_id", "building_name", "year_month"])
+        .agg(monthly_util=("util", "mean"))
+        .reset_index()
     )
 
     breach = bldg_monthly[bldg_monthly["monthly_util"] >= 0.90]
@@ -338,6 +375,8 @@ def apply_scenario_adjustments(
     # Deprecated: use scope + scope_values instead
     building_filter: Optional[List[str]] = None,
     lob_filter: Optional[List[str]] = None,
+    # Override multipliers (e.g. from Admin config); falls back to SCENARIO_MULTIPLIERS
+    scenario_multipliers: Optional[Dict[str, float]] = None,
 ) -> pd.DataFrame:
     # Backward-compat: map old params to new scope model
     if building_filter and scope == "all":
@@ -347,14 +386,16 @@ def apply_scenario_adjustments(
         scope = "lob"
         scope_values = lob_filter
 
+    _mults = scenario_multipliers if scenario_multipliers is not None else SCENARIO_MULTIPLIERS
+
     df = daily_df.copy()
     start_ts = pd.Timestamp(date_range[0])
     end_ts = pd.Timestamp(date_range[1])
 
     combined_mult = 1.0
     for key, selected in adjustments.items():
-        if selected and key in SCENARIO_MULTIPLIERS:
-            combined_mult *= SCENARIO_MULTIPLIERS[key]
+        if selected and key in _mults:
+            combined_mult *= _mults[key]
     if custom_factor_pct != 0.0:
         combined_mult *= 1.0 + custom_factor_pct / 100.0
 
@@ -912,8 +953,14 @@ def compute_seat_gap_by_building(
 
     target_util = max(0.01, target_utilization)
 
+    # Aggregate to building-day level first so tower rows are correctly summed
+    bldg_day = (
+        weekday_df.groupby(["date", "building_id", "building_name"])
+        .agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
+        .reset_index()
+    )
     bldg = (
-        weekday_df.groupby(["building_id", "building_name"])
+        bldg_day.groupby(["building_id", "building_name"])
         .agg(
             peak_footfall=("footfall", "max"),
             avg_footfall=("footfall", "mean"),
@@ -952,11 +999,7 @@ def compute_policy_kpis(
     else:
         portfolio_gap = int(gap_df["Surplus / Deficit"].sum())
 
-    total_cap = int(
-        get_horizon_df(policy_df, horizon_days)
-        .groupby("building_id")["capacity"].first()
-        .sum()
-    )
+    total_cap = _total_capacity(get_horizon_df(policy_df, horizon_days))
 
     return {
         "base_demand": int(base_demand),

@@ -76,3 +76,19 @@ PLANNING_BUFFER_PRESETS = {
     },
 }
 DEFAULT_PLANNING_BUFFER = "balanced"
+
+# ---------------------------------------------------------------------------
+# Scenario Planner — event adjustment multipliers
+# Each entry: {event_key: {"label": display_name, "multiplier": float}}
+# Multiplier > 1.0 increases footfall; < 1.0 decreases footfall.
+# Admins can override these at runtime via the Admin tab.
+# ---------------------------------------------------------------------------
+DEFAULT_SCENARIO_MULTIPLIERS = {
+    "townhall":           {"label": "Townhall",                   "multiplier": 1.20},
+    "leadership_visit":   {"label": "Leadership Visit",           "multiplier": 1.15},
+    "weather_alert":      {"label": "Weather Alert",              "multiplier": 0.70},
+    "traffic_disruption": {"label": "Traffic / Local Disruption", "multiplier": 0.80},
+    "mandatory_holiday":  {"label": "Mandatory Holiday",          "multiplier": 0.10},
+    "optional_holiday":   {"label": "Optional Holiday",           "multiplier": 0.60},
+    "us_holiday":         {"label": "US Holiday",                 "multiplier": 0.75},
+}

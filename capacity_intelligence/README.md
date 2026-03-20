@@ -7,11 +7,15 @@ A standalone Streamlit app that transforms predictive footfall data into actiona
 ## Quick Start
 
 ```bash
-# From the cpg_planning_tool root directory:
+# 1. Install dependencies
+pip install -r capacity_intelligence/requirements.txt
+
+# 2. Run the app (from the cpg_planning_tool root directory)
 streamlit run capacity_intelligence/app.py
 
 # Or from inside the capacity_intelligence folder:
 cd capacity_intelligence
+pip install -r requirements.txt
 streamlit run app.py
 ```
 
@@ -27,7 +31,7 @@ Operational view for the next 30 or 60 days. Target audience: Regional Capacity 
 | Component | Description |
 |---|---|
 | KPI row | Peak footfall, Avg daily footfall, Buildings >90% utilization, Buildings <60% utilization |
-| Building Risk Details | Expandable drilldown table — Building, City, LoB, Capacity, Peak Footfall, Avg Util %, Peak Util %, Risk label |
+| Building Risk Details | Expandable drilldown table — Building, City, Capacity, Peak Footfall, Avg Util %, Peak Util %, Risk label |
 | Insights panel | Auto-generated bullets — buildings near capacity, Friday dip, under-utilized offices |
 | Daily forecast chart | Total footfall vs capacity limit (red threshold line) |
 | Day-of-week bar chart | Avg utilization % by Mon–Sun; bars colored by risk level |
@@ -90,12 +94,18 @@ Two modes selectable via radio button at top:
 ---
 
 ### 4. Admin (⚙️)
-Data management tab. Load sample data or upload your own CSV here.
+Data management tab. Two data source options:
 
-- **Load Sample Data** — one-click load of the built-in 27-tower / 12-building synthetic dataset; activates all tabs immediately
-- **Scenario Adjustment Configuration** — admin-editable table of event multipliers (add, edit, delete event types)
-- **Upload CSV** — upload your own footfall file; CSV template download included
-- **Data Preview** — row count, date range, building count, first 20 rows, per-building summary with avg utilization
+**Use Sample Data**
+- One-click load of the built-in 27-tower / 12-building synthetic dataset; activates all tabs immediately
+
+**Upload Your Data** (two-step)
+- **Step 1 — Building/Tower Master**: upload the static reference file (tower hierarchy, capacities). Only needs to be re-uploaded when buildings/towers change.
+- **Step 2 — Footfall Data**: upload the daily attendance file. Re-upload any time to replace with fresh data. Auto-joins to the Master on `tower_id` and activates all tabs.
+- CSV templates available for both files via download buttons
+
+**Scenario Adjustment Configuration** (expander)
+- Admin-editable table of event multipliers used in the Scenario Planner — add, edit, or delete event types without a code change
 
 ---
 
@@ -123,30 +133,34 @@ In-app reference guide covering:
 
 Each tower has 10 floors (stored as `floor_count` column — not exposed as a filter). Mix of high-growth (Engineering, Product), stable (Sales, Finance), and declining (Operations) LoB profiles. 365 days of daily footfall — DOW patterns, per-tower linear growth trend, ±8% Gaussian noise (seed=42).
 
-### Upload Your Own CSV
-Go to the **⚙️ Admin** tab and select "Upload your CSV". The file must contain these columns:
+### Upload Your Own Data
 
-**Required columns:**
+The app uses **two separate files**. Go to **⚙️ Admin → Upload Your Data**.
 
-| Column | Type | Example |
-|---|---|---|
-| `date` | date (YYYY-MM-DD) | 2026-04-01 |
-| `building_id` | string | BLR-1 |
-| `building_name` | string | Prestige Tech Park |
-| `city` | string | Bangalore |
-| `lob` | string | Engineering |
-| `footfall` | integer | 412 |
-| `capacity` | integer | 500 |
+#### File 1 — Building / Tower Master
+One row per tower. Upload once; only re-upload when your building/tower list or capacities change.
 
-**Optional columns** (gracefully handled if absent):
+| Column | Type | Example | Required |
+|---|---|---|---|
+| `tower_id` | string | BLR-1-TA | ✅ |
+| `tower_name` | string | Tower A | ✅ |
+| `building_id` | string | BLR-1 | ✅ |
+| `building_name` | string | Prestige Tech Park | ✅ |
+| `city` | string | Bangalore | ✅ |
+| `lob` | string | Engineering | ✅ |
+| `capacity` | integer | 200 | ✅ |
+| `floor_count` | integer | 10 | optional |
 
-| Column | Type | Example |
-|---|---|---|
-| `tower_id` | string | BLR-1-TA |
-| `tower_name` | string | Tower A |
-| `floor_count` | integer | 10 |
+#### File 2 — Footfall Data
+One row per tower per day. Re-upload whenever you have fresh attendance data — replaces the previous load entirely.
 
-Each row = one tower (or building) on one day. A **Download CSV template** button is available in the Admin tab.
+| Column | Type | Example | Required |
+|---|---|---|---|
+| `date` | date (YYYY-MM-DD) | 2026-04-01 | ✅ |
+| `tower_id` | string | BLR-1-TA | ✅ |
+| `footfall` | integer | 168 | ✅ |
+
+The app joins File 2 to File 1 on `tower_id`. A warning is shown if any `tower_id` in the footfall file has no matching entry in the master. **Download CSV templates** for both files are available in the Admin tab.
 
 ---
 

@@ -277,8 +277,8 @@ def generate_insights_short_term(daily_df: pd.DataFrame, horizon_days: int = 30)
         })
 
     bldg_stats = (
-        bldg_day.groupby(["building_id", "building_name"])
-        .apply(_bldg_stats, include_groups=False)
+        bldg_day.groupby(["building_id", "building_name"])[["date", "util"]]
+        .apply(_bldg_stats)
         .reset_index()
     )
 

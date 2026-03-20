@@ -49,7 +49,6 @@ def filter_df(
     buildings: Optional[List[str]] = None,
     cities: Optional[List[str]] = None,
     lobs: Optional[List[str]] = None,
-    countries: Optional[List[str]] = None,
 ) -> pd.DataFrame:
     df = daily_df
     if buildings:
@@ -58,8 +57,6 @@ def filter_df(
         df = df[df["city"].isin(cities)]
     if lobs:
         df = df[df["lob"].isin(lobs)]
-    if countries:
-        df = df[df["country"].isin(countries)]
     return df
 
 
@@ -714,47 +711,6 @@ def plot_capacity_calendar(daily_df: pd.DataFrame, horizon_days: int = 30) -> go
         ),
         height=max(250, n_weeks * 80),
         margin=dict(l=50, r=10, t=40, b=10),
-    )
-    return fig
-
-
-def plot_monthly_forecast(daily_df: pd.DataFrame) -> go.Figure:
-    """Monthly aggregated footfall vs capacity line chart."""
-    df = daily_df[daily_df["date"].dt.dayofweek < 5].copy()
-    if df.empty:
-        return go.Figure()
-
-    df["year_month"] = df["date"].dt.to_period("M")
-    monthly = (
-        df.groupby("year_month")
-        .agg(
-            avg_daily_footfall=("footfall", lambda s: s.groupby(df.loc[s.index, "date"]).sum().mean()),
-            avg_daily_capacity=("capacity", lambda s: s.groupby(df.loc[s.index, "date"]).sum().mean()),
-        )
-        .reset_index()
-    )
-    monthly["month_label"] = monthly["year_month"].dt.strftime("%b %Y")
-    monthly = monthly.sort_values("year_month")
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=monthly["month_label"], y=monthly["avg_daily_footfall"].round(),
-        mode="lines+markers", name="Avg Daily Footfall",
-        line=dict(color="#1a3c5e", width=2.5),
-        fill="tozeroy", fillcolor="rgba(26,60,94,0.08)",
-    ))
-    fig.add_trace(go.Scatter(
-        x=monthly["month_label"], y=monthly["avg_daily_capacity"],
-        mode="lines", name="Capacity",
-        line=dict(color="#dc3545", width=2, dash="dot"),
-    ))
-    fig.update_layout(
-        title="Monthly Avg Daily Footfall vs Capacity",
-        xaxis_title="Month", yaxis_title="Avg Daily Seats",
-        legend=dict(orientation="h", y=-0.2),
-        height=320,
-        margin=dict(l=10, r=10, t=40, b=10),
-        hovermode="x unified",
     )
     return fig
 

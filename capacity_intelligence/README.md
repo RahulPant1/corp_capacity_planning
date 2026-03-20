@@ -56,7 +56,7 @@ Strategic view across 6 or 12 months. Target audience: Portfolio Executives / CA
 | Building × Month heatmap | Utilization % matrix; light = low, dark = high, red = over capacity |
 | City capacity table | City \| Utilization % \| Surplus — color-coded |
 
-Filters: Country, City, Line of Business, Building. Toggle: 6/12-month horizon.
+Filters: City, Line of Business, Building. Toggle: 6/12-month horizon.
 
 ---
 
@@ -92,7 +92,8 @@ Two modes selectable via radio button at top:
 ### 4. Admin (⚙️)
 Data management tab. Load sample data or upload your own CSV here.
 
-- **Load Sample Data** — one-click load of the built-in 7-building synthetic dataset; activates all tabs immediately
+- **Load Sample Data** — one-click load of the built-in 27-tower / 12-building synthetic dataset; activates all tabs immediately
+- **Scenario Adjustment Configuration** — admin-editable table of event multipliers (add, edit, delete event types)
 - **Upload CSV** — upload your own footfall file; CSV template download included
 - **Data Preview** — row count, date range, building count, first 20 rows, per-building summary with avg utilization
 
@@ -111,26 +112,41 @@ In-app reference guide covering:
 ## Data Loading
 
 ### Sample Data
-7 synthetic buildings across Bangalore, Hyderabad, Chennai, and Manila with realistic utilization profiles:
-- Mix of high-growth (Engineering, Product), stable (Sales, Finance), and declining (Operations) units
-- Intentionally includes buildings near capacity and under-utilized buildings for demo value
-- 365 days of daily footfall from today — DOW patterns, linear growth trend (per-building), Gaussian noise (seed=42)
+**~9,855 rows** — 27 towers across 12 buildings in 4 cities (Bangalore, Hyderabad, Chennai, Manila):
+
+| City | Buildings | Towers |
+|---|---|---|
+| Bangalore | 3 (Prestige Tech Park, RMZ Infinity, Embassy Tech Village) | 7 |
+| Hyderabad | 3 (Mindspace, DivyaSree, Raheja Mindspace) | 7 |
+| Chennai | 3 (RMZ Millenia, Chennai One, TIDEL Park) | 7 |
+| Manila | 3 (BGC One, Robinsons Cybergate, Eastwood City) | 6 |
+
+Each tower has 10 floors (stored as `floor_count` column — not exposed as a filter). Mix of high-growth (Engineering, Product), stable (Sales, Finance), and declining (Operations) LoB profiles. 365 days of daily footfall — DOW patterns, per-tower linear growth trend, ±8% Gaussian noise (seed=42).
 
 ### Upload Your Own CSV
 Go to the **⚙️ Admin** tab and select "Upload your CSV". The file must contain these columns:
 
+**Required columns:**
+
 | Column | Type | Example |
 |---|---|---|
 | `date` | date (YYYY-MM-DD) | 2026-04-01 |
-| `building_id` | string | BLR-ENG |
-| `building_name` | string | Bangalore Engineering Hub |
+| `building_id` | string | BLR-1 |
+| `building_name` | string | Prestige Tech Park |
 | `city` | string | Bangalore |
-| `country` | string | India |
 | `lob` | string | Engineering |
 | `footfall` | integer | 412 |
 | `capacity` | integer | 500 |
 
-Each row = one building on one day. A **Download CSV template** button is available in the Admin tab.
+**Optional columns** (gracefully handled if absent):
+
+| Column | Type | Example |
+|---|---|---|
+| `tower_id` | string | BLR-1-TA |
+| `tower_name` | string | Tower A |
+| `floor_count` | integer | 10 |
+
+Each row = one tower (or building) on one day. A **Download CSV template** button is available in the Admin tab.
 
 ---
 
@@ -174,19 +190,24 @@ scenario_footfall = baseline_footfall × combined_mult
 
 ```
 capacity_intelligence/
-├── app.py                      # Streamlit entry point (all tab UI)
+├── app.py                          # Streamlit entry point — page config, sidebar, tab wiring
 ├── data/
-│   └── ci_sample_data.py       # Sample data generator (7 buildings, 365-day forecast)
+│   └── ci_sample_data.py           # Sample data generator (27 towers, 12 buildings, ~9,855 rows)
 ├── engine/
-│   ├── capacity_forecast.py    # All forecast/analysis/chart functions
-│   ├── allocation_engine.py    # Seat allocation engine
-│   ├── optimizer.py            # LP optimizer
-│   ├── scenario_engine.py      # Scenario simulation engine
-│   └── spatial.py              # Floor assignment engine
-├── models/                     # Data models (Scenario, Unit, Floor, Attendance, etc.)
-├── components/                 # Reusable UI components (charts, tables, metric cards)
-└── config/
-    └── defaults.py             # Policy constants and thresholds
+│   ├── capacity_forecast.py        # All forecast / analysis / chart functions
+│   └── scenario_report.py          # Excel report generation (4-sheet workbook)
+├── tabs/
+│   ├── tab_short_term.py           # Short-Term View tab
+│   ├── tab_long_term.py            # Long-Term View tab
+│   ├── tab_scenario_planner.py     # Scenario Planner tab (Mode A + Mode B)
+│   ├── tab_admin.py                # Admin tab (data loading, scenario adjustment config)
+│   └── tab_help.py                 # Help / reference tab
+├── components/                     # Reusable UI components (charts, tables, metric cards)
+├── config/
+│   └── defaults.py                 # Policy constants, thresholds, default scenario multipliers
+└── for_future/                     # Fully built but not yet wired to UI — see for_future/README.md
+    ├── engine/                     # allocation_engine, optimizer, spatial, scenario_engine, explainer
+    └── models/                     # Scenario, Unit, Floor, Attendance, AuditEntry dataclasses
 ```
 
 ---
@@ -199,9 +220,10 @@ pandas
 numpy
 plotly
 pulp
+openpyxl
 ```
 
-No additional packages required beyond the parent CPG planning tool environment.
+Install with: `pip install -r requirements.txt`
 
 ---
 

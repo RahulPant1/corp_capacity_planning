@@ -63,6 +63,17 @@ for _k, _v in _DEFAULTS.items():
 # Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
+    st.markdown("### 📊 Capacity Intelligence")
+    if st.session_state.get("ci_data_loaded"):
+        df = st.session_state["ci_daily_df"]
+        src = st.session_state.get("ci_data_source", "uploaded")
+        st.success(f"Data loaded · {src}")
+        st.caption(
+            f"{len(df):,} rows\n\n"
+            f"{df['date'].min().date()} → {df['date'].max().date()}"
+        )
+    else:
+        st.info("No data loaded — go to **Admin** tab")
     st.divider()
     st.caption("Run: `streamlit run capacity_intelligence/app.py`")
 

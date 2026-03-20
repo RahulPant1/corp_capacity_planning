@@ -721,7 +721,7 @@ def plot_capacity_calendar(daily_df: pd.DataFrame, horizon_days: int = 30) -> go
             x=dow, y=week,
             text=cell_text,
             showarrow=False,
-            font=dict(size=9, color=fg),
+            font=dict(size=12, color=fg),
         )
 
     # ── Tier legend (bottom annotations) ──────────────────────────────────
@@ -737,7 +737,7 @@ def plot_capacity_calendar(daily_df: pd.DataFrame, horizon_days: int = 30) -> go
             xref="x", yref="y",
             text=f"<span style='background:{bg};color:{fg};padding:2px 5px'>{label}</span>",
             showarrow=False,
-            font=dict(size=9),
+            font=dict(size=11),
         )
 
     n_weeks = int(daily["week"].max()) + 1
@@ -756,7 +756,7 @@ def plot_capacity_calendar(daily_df: pd.DataFrame, horizon_days: int = 30) -> go
             range=[-0.6, n_weeks + 0.2],
             autorange="reversed",
         ),
-        height=max(280, n_weeks * 85 + 60),
+        height=max(320, n_weeks * 100 + 60),
         margin=dict(l=50, r=10, t=40, b=10),
     )
     return fig

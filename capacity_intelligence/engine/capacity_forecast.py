@@ -634,7 +634,15 @@ def plot_dow_bar(dow_df: pd.DataFrame) -> go.Figure:
 
 
 def plot_capacity_calendar(daily_df: pd.DataFrame, horizon_days: int = 30) -> go.Figure:
-    """Calendar grid where cells are coloured by utilization level."""
+    """Calendar grid coloured by the same 4-tier utilization bands as the heatmap.
+
+    Tiers (matching plot_building_heatmap):
+      < 60%  — very light blue-grey  ↓  Under-utilised
+      60–75% — light green           ✓  Healthy
+      75–85% — amber                 !  Watch
+      > 85%  — red                   ▲  Over-capacity
+      Weekend — light grey (no attendance expected)
+    """
     df = get_horizon_df(daily_df, horizon_days)
     if df.empty:
         return go.Figure()
@@ -645,52 +653,91 @@ def plot_capacity_calendar(daily_df: pd.DataFrame, horizon_days: int = 30) -> go
         .reset_index()
     )
     daily["util_pct"] = daily["footfall"] / daily["capacity"] * 100
-    daily["day"] = daily["date"].dt.day
-    daily["dow"] = daily["date"].dt.dayofweek          # 0=Mon
-    daily["month_str"] = daily["date"].dt.strftime("%b %Y")
+    daily["dow"] = daily["date"].dt.dayofweek   # 0=Mon
     daily["week"] = daily["date"].apply(
         lambda d: (d - daily["date"].min()).days // 7
     )
 
-    # Discrete color
-    def cell_color(u):
-        if u > 90:
-            return "#f8d7da"
-        elif u > 75:
-            return "#fff3cd"
-        elif u > 5:
-            return "#d4edda"
-        return "#e9ecef"
+    # ── 4-tier colour palette (same as heatmap) ───────────────────────────
+    def cell_color(u, is_weekend):
+        if is_weekend:
+            return "#f0f0f0"
+        if u > 85:
+            return "#e06c6c"
+        if u > 75:
+            return "#f6c94e"
+        if u > 60:
+            return "#a8d5a2"
+        return "#dde8f0"
 
-    def text_color(u):
-        return "#721c24" if u > 90 else "#856404" if u > 75 else "#155724" if u > 5 else "#adb5bd"
+    def text_color(u, is_weekend):
+        if is_weekend:
+            return "#bbbbbb"
+        if u > 85:
+            return "#7b1a1a"
+        if u > 75:
+            return "#856404"
+        if u > 60:
+            return "#155724"
+        return "#4a6585"
+
+    def tier_symbol(u, is_weekend):
+        if is_weekend:
+            return ""
+        if u > 85:
+            return "▲"
+        if u > 75:
+            return "!"
+        if u > 60:
+            return "✓"
+        return "↓"
 
     dow_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-
     fig = go.Figure()
 
     for _, row in daily.iterrows():
-        week = row["week"]
-        dow = row["dow"]
+        week = int(row["week"])
+        dow = int(row["dow"])
         util = row["util_pct"]
-        label = f"{row['date'].strftime('%b %d')}<br>{util:.0f}%"
-        if util > 90:
-            label += "<br><b>Over capacity</b>"
-        elif util < 60 and util > 5:
-            label += "<br>Under capacity"
+        is_weekend = dow >= 5
+
+        bg = cell_color(util, is_weekend)
+        fg = text_color(util, is_weekend)
+        sym = tier_symbol(util, is_weekend)
+
+        if is_weekend:
+            cell_text = row["date"].strftime("%b %d")
+        else:
+            cell_text = f"{row['date'].strftime('%b %d')}<br>{util:.0f}% {sym}"
 
         fig.add_shape(
             type="rect",
             x0=dow - 0.45, x1=dow + 0.45,
             y0=week - 0.45, y1=week + 0.45,
-            fillcolor=cell_color(util),
+            fillcolor=bg,
             line=dict(color="white", width=2),
         )
         fig.add_annotation(
             x=dow, y=week,
-            text=label,
+            text=cell_text,
             showarrow=False,
-            font=dict(size=9, color=text_color(util)),
+            font=dict(size=9, color=fg),
+        )
+
+    # ── Tier legend (bottom annotations) ──────────────────────────────────
+    legend_items = [
+        ("↓ <60% Under",    "#dde8f0", "#4a6585"),
+        ("✓ 60–75% Healthy", "#a8d5a2", "#155724"),
+        ("! 75–85% Watch",   "#f6c94e", "#856404"),
+        ("▲ >85% Risk",      "#e06c6c", "#7b1a1a"),
+    ]
+    for i, (label, bg, fg) in enumerate(legend_items):
+        fig.add_annotation(
+            x=i * 1.75, y=-0.75,
+            xref="x", yref="y",
+            text=f"<span style='background:{bg};color:{fg};padding:2px 5px'>{label}</span>",
+            showarrow=False,
+            font=dict(size=9),
         )
 
     n_weeks = int(daily["week"].max()) + 1
@@ -706,10 +753,10 @@ def plot_capacity_calendar(daily_df: pd.DataFrame, horizon_days: int = 30) -> go
             tickmode="array",
             tickvals=list(range(n_weeks)),
             ticktext=[f"Wk {i+1}" for i in range(n_weeks)],
-            range=[-0.6, n_weeks - 0.4],
+            range=[-0.6, n_weeks + 0.2],
             autorange="reversed",
         ),
-        height=max(250, n_weeks * 80),
+        height=max(280, n_weeks * 85 + 60),
         margin=dict(l=50, r=10, t=40, b=10),
     )
     return fig

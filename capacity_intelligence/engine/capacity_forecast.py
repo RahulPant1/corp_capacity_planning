@@ -716,9 +716,24 @@ def plot_capacity_calendar(daily_df: pd.DataFrame, horizon_days: int = 30) -> go
 
 
 def plot_building_heatmap(monthly_df: pd.DataFrame) -> go.Figure:
-    """Building × Month utilization heatmap."""
+    """Building × Month utilization heatmap with 4-tier discrete colour bands.
+
+    Tiers:
+      < 60%  — very light blue-grey  (under-utilised)
+      60–75% — light green           (healthy)
+      75–85% — amber                 (watch)
+      > 85%  — red                   (over-capacity risk)
+    """
     if monthly_df.empty:
         return go.Figure()
+
+    # Chronological column order
+    month_order = (
+        monthly_df[["month_label", "month_order"]]
+        .drop_duplicates()
+        .sort_values("month_order")["month_label"]
+        .tolist()
+    )
 
     # Pivot: buildings as rows, months as columns
     pivot = monthly_df.pivot_table(
@@ -727,31 +742,89 @@ def plot_building_heatmap(monthly_df: pd.DataFrame) -> go.Figure:
         values="util_pct",
         aggfunc="mean",
     )
-    # Sort columns chronologically using month_order
-    month_order = (
-        monthly_df[["month_label", "month_order"]]
-        .drop_duplicates()
-        .sort_values("month_order")["month_label"]
-        .tolist()
-    )
     cols_present = [c for c in month_order if c in pivot.columns]
     pivot = pivot[cols_present]
 
-    fig = px.imshow(
-        pivot,
-        color_continuous_scale=[[0, "#f0f4f8"], [0.5, "#4a7dba"], [0.85, "#1a3c5e"], [1.0, "#dc3545"]],
-        zmin=0, zmax=100,
-        aspect="auto",
-        text_auto=".0f",
-        labels=dict(color="Util %"),
-    )
+    # Sort buildings by average utilization descending (highest risk at top)
+    pivot = pivot.loc[pivot.mean(axis=1).sort_values(ascending=False).index]
+
+    n_buildings = len(pivot)
+    n_months = len(cols_present)
+
+    # ── Discrete 4-tier colorscale ────────────────────────────────────────
+    # Each band defined by a pair of identical colours at (start, end-ε)
+    # so Plotly produces flat blocks rather than a gradient.
+    # zmin=0, zmax=100 → normalised positions: 0.60, 0.75, 0.85
+    COLORSCALE = [
+        [0.000, "#dde8f0"], [0.599, "#dde8f0"],  # <60%  : very light blue-grey
+        [0.600, "#a8d5a2"], [0.749, "#a8d5a2"],  # 60-75%: light green
+        [0.750, "#f6c94e"], [0.849, "#f6c94e"],  # 75-85%: amber
+        [0.850, "#e06c6c"], [1.000, "#c0392b"],  # >85%  : red
+    ]
+
+    # ── Annotation text: value + tier label ──────────────────────────────
+    z_values = pivot.values
+
+    def _tier(v):
+        if v < 60:
+            return "↓"   # under-utilised
+        if v < 75:
+            return "✓"   # healthy
+        if v < 85:
+            return "!"    # watch
+        return "▲"        # over-capacity
+
+    text_matrix = [
+        [f"{v:.0f}%\n{_tier(v)}" if not pd.isna(v) else "" for v in row]
+        for row in z_values
+    ]
+
+    fig = go.Figure(go.Heatmap(
+        z=z_values,
+        x=cols_present,
+        y=pivot.index.tolist(),
+        text=text_matrix,
+        texttemplate="%{text}",
+        colorscale=COLORSCALE,
+        zmin=0,
+        zmax=100,
+        showscale=True,
+        colorbar=dict(
+            title="Util %",
+            tickvals=[30, 60, 75, 85, 95],
+            ticktext=["<60% Under", "60%", "75% Watch", "85%", ">85% Risk"],
+            len=0.8,
+        ),
+        hovertemplate="<b>%{y}</b><br>%{x}<br>Utilization: %{z:.1f}%<extra></extra>",
+    ))
+
+    # Tier legend as subtitle annotations
+    tier_labels = [
+        ("◼ <60% Under-utilised", "#dde8f0", "#333"),
+        ("◼ 60–75% Healthy",      "#a8d5a2", "#155724"),
+        ("◼ 75–85% Watch",        "#f6c94e", "#856404"),
+        ("◼ >85% Over-capacity",  "#e06c6c", "#7b1a1a"),
+    ]
+    for i, (label, bg, fg) in enumerate(tier_labels):
+        fig.add_annotation(
+            x=1.18 + 0.0, y=1.08 - i * 0.06,
+            xref="paper", yref="paper",
+            text=f"<span style='color:{fg}'>{label}</span>",
+            showarrow=False,
+            font=dict(size=10),
+            xanchor="left",
+        )
+
+    row_height = 42  # px per building row
     fig.update_layout(
-        title="Monthly Utilization by Building (%)",
-        height=280,
-        margin=dict(l=10, r=10, t=40, b=10),
-        coloraxis_colorbar=dict(title="Util %"),
+        title="Monthly Utilization by Building",
+        height=max(320, n_buildings * row_height + 80),
+        margin=dict(l=10, r=180, t=60, b=40),
+        xaxis=dict(side="top", tickangle=-30),
+        yaxis=dict(autorange="reversed"),
+        font=dict(size=11),
     )
-    fig.update_traces(textfont_size=10)
+    fig.update_traces(textfont=dict(size=10, color="black"))
     return fig
 
 

@@ -101,7 +101,7 @@ def compute_portfolio_kpis(
     # Per-building utilisation stats
     bldg_daily = (
         weekday_df.groupby(["date", "building_id"])
-        .agg(footfall=("footfall", "sum"), capacity=("capacity", "first"))
+        .agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
         .reset_index()
     )
     bldg_daily["util"] = bldg_daily["footfall"] / bldg_daily["capacity"]

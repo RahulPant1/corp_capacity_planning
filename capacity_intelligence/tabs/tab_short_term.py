@@ -98,15 +98,15 @@ def render() -> None:
         if weekday_df.empty:
             st.info("No data for current selection.")
         else:
-            # Aggregate to building-day level so tower rows are summed correctly
+            # Aggregate to building-day level so all towers in a building are summed
             bldg_day = (
-                weekday_df.groupby(["date", "building_id", "building_name", "city", "lob"])
+                weekday_df.groupby(["date", "building_id", "building_name", "city"])
                 .agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
                 .reset_index()
             )
             bldg_day["util"] = bldg_day["footfall"] / bldg_day["capacity"]
             bldg_stats = (
-                bldg_day.groupby(["building_id", "building_name", "city", "lob"])
+                bldg_day.groupby(["building_id", "building_name", "city"])
                 .agg(
                     Capacity=("capacity", "first"),
                     peak_footfall=("footfall", "max"),
@@ -115,7 +115,7 @@ def render() -> None:
                 )
                 .reset_index()
                 .rename(columns={
-                    "building_name": "Building", "city": "City", "lob": "LoB",
+                    "building_name": "Building", "city": "City",
                     "peak_footfall": "Peak Footfall",
                 })
             )
@@ -133,7 +133,7 @@ def render() -> None:
 
             bldg_stats["Risk"] = bldg_stats.apply(_risk_label, axis=1)
             display = bldg_stats.sort_values("Peak Util %", ascending=False)[
-                ["Building", "City", "LoB", "Capacity", "Peak Footfall", "Avg Util %", "Peak Util %", "Risk"]
+                ["Building", "City", "Capacity", "Peak Footfall", "Avg Util %", "Peak Util %", "Risk"]
             ]
 
             def _style_risk(df):

@@ -95,23 +95,46 @@ def render() -> None:
                 adj_scope_values = []
 
             st.markdown("**Event Period**")
-            st.caption(
-                "Footfall within this period is adjusted by the selected event. "
-                "Dates outside remain at baseline."
+            st.caption("Select when the event occurs. Only footfall in this window is adjusted.")
+
+            today = date.today()
+            period_preset = st.radio(
+                "Planning window",
+                ["Next Week", "Next 2 Weeks", "Next Month", "Next Quarter", "Custom"],
+                horizontal=True,
+                index=0,
+                key="sp_period_preset",
             )
-            default_start = date.today() + timedelta(days=7)
-            default_end = date.today() + timedelta(days=21)
-            date_range_a = st.date_input(
-                "Event start → end",
-                value=(default_start, default_end),
-                min_value=date.today(),
-                max_value=date.today() + timedelta(days=365),
-                key="sp_daterange_a",
-            )
-            if isinstance(date_range_a, (list, tuple)) and len(date_range_a) == 2:
-                dr_start, dr_end = date_range_a[0], date_range_a[1]
-            else:
-                dr_start, dr_end = default_start, default_end
+
+            if period_preset == "Next Week":
+                dr_start = today + timedelta(days=1)
+                dr_end   = today + timedelta(days=7)
+            elif period_preset == "Next 2 Weeks":
+                dr_start = today + timedelta(days=1)
+                dr_end   = today + timedelta(days=14)
+            elif period_preset == "Next Month":
+                dr_start = today + timedelta(days=1)
+                dr_end   = today + timedelta(days=30)
+            elif period_preset == "Next Quarter":
+                dr_start = today + timedelta(days=1)
+                dr_end   = today + timedelta(days=90)
+            else:  # Custom
+                custom_range = st.date_input(
+                    "Select date range",
+                    value=(today + timedelta(days=7), today + timedelta(days=21)),
+                    min_value=today,
+                    max_value=today + timedelta(days=365),
+                    key="sp_daterange_a",
+                )
+                if isinstance(custom_range, (list, tuple)) and len(custom_range) == 2:
+                    dr_start, dr_end = custom_range[0], custom_range[1]
+                else:
+                    dr_start = today + timedelta(days=7)
+                    dr_end   = today + timedelta(days=21)
+
+            if period_preset != "Custom":
+                n_days = (dr_end - dr_start).days + 1
+                st.caption(f"📅 {dr_start.strftime('%b %d')} → {dr_end.strftime('%b %d, %Y')} ({n_days} days)")
 
             st.markdown("")
             st.markdown("**Built-in Adjustments**")

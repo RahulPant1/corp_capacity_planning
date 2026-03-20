@@ -22,10 +22,19 @@ import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
-# Required / optional column sets (used by Admin tab for upload validation)
+# Column sets for the two-file upload model
 # ---------------------------------------------------------------------------
-REQUIRED_COLS = {"date", "building_id", "building_name", "city", "lob", "footfall", "capacity"}
-OPTIONAL_COLS = {"tower_id", "tower_name", "floor_count"}
+
+# Building/Tower Master — static reference data (capacity, hierarchy)
+MASTER_REQUIRED_COLS = {"tower_id", "tower_name", "building_id", "building_name", "city", "lob", "capacity"}
+MASTER_OPTIONAL_COLS = {"floor_count"}
+
+# Footfall Data — daily attendance counts (slim, time-series)
+FOOTFALL_REQUIRED_COLS = {"date", "tower_id", "footfall"}
+
+# Legacy single-file cols kept for reference only (no longer used by upload UI)
+REQUIRED_COLS = MASTER_REQUIRED_COLS | FOOTFALL_REQUIRED_COLS
+OPTIONAL_COLS = MASTER_OPTIONAL_COLS
 
 # ---------------------------------------------------------------------------
 # Tower definitions
@@ -303,6 +312,50 @@ def generate_daily_footfall(seed: int = 42, horizon_days: int = 365) -> pd.DataF
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
+
+def get_master_df() -> pd.DataFrame:
+    """Return the Building/Tower Master as a DataFrame (static reference data).
+
+    Columns: tower_id, tower_name, building_id, building_name, city, lob, floor_count, capacity
+    One row per tower — no date column.
+    """
+    return pd.DataFrame([
+        {
+            "tower_id":      t["tower_id"],
+            "tower_name":    t["tower_name"],
+            "building_id":   t["building_id"],
+            "building_name": t["building_name"],
+            "city":          t["city"],
+            "lob":           t["lob"],
+            "floor_count":   t["floor_count"],
+            "capacity":      t["total_capacity"],
+        }
+        for t in TOWERS_META
+    ])
+
+
+def get_footfall_df(seed: int = 42, horizon_days: int = 365) -> pd.DataFrame:
+    """Return slim footfall-only DataFrame (date × tower_id × footfall).
+
+    Columns: date, tower_id, footfall
+    This is the time-series counterpart to get_master_df().
+    Join on tower_id to reconstruct the full working DataFrame.
+    """
+    full = generate_daily_footfall(seed=seed, horizon_days=horizon_days)
+    return full[["date", "tower_id", "footfall"]].copy()
+
+
+def join_master_footfall(master_df: pd.DataFrame, footfall_df: pd.DataFrame) -> pd.DataFrame:
+    """Join master + footfall on tower_id → full working DataFrame used by all tabs.
+
+    Returns columns:
+        date, tower_id, tower_name, building_id, building_name,
+        city, lob, floor_count, footfall, capacity, utilization_pct
+    """
+    df = footfall_df.merge(master_df, on="tower_id", how="left")
+    df["utilization_pct"] = (df["footfall"] / df["capacity"]).clip(upper=1.30)
+    return df
+
 
 def get_buildings_meta() -> list:
     """Return building-level metadata list (backward-compat)."""

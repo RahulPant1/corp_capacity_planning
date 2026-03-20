@@ -51,7 +51,9 @@ st.markdown("""
 # ---------------------------------------------------------------------------
 _DEFAULTS = {
     "ci_data_loaded": False,
-    "ci_daily_df": None,
+    "ci_daily_df": None,       # joined working DataFrame (all tabs read this)
+    "ci_master_df": None,      # Building/Tower Master (static reference)
+    "ci_footfall_df": None,    # Footfall Data (daily time-series)
     "ci_buildings_meta": None,
     "ci_data_source": None,
 }

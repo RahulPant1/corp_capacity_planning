@@ -1,229 +1,332 @@
-"""Help tab — reference guide for calculations, formulas, and thresholds."""
+"""Help tab — reference guide for the 4-dataset model, calculations, and thresholds."""
 
 
 def render() -> None:
     import streamlit as st
 
     st.markdown("### 📖 How This App Works")
-    st.caption("Reference guide for all calculations, formulas, and thresholds used across the app.")
+    st.caption("Reference guide for all data inputs, calculations, formulas, and thresholds used across the app.")
 
-    with st.expander("1 · Data Model", expanded=True):
+    # ── Getting Started ────────────────────────────────────────────────────────
+    with st.expander("0 · Getting Started — How to Load Data", expanded=True):
         st.markdown("""
-**Required columns** (for both sample data and uploaded CSV):
+The app requires **four datasets** to be active before any tab shows data.
+You can load them in two ways — both are available in the **⚙️ Admin** tab.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `date` | date | Calendar date of the record |
-| `building_id` | string | Unique building identifier (e.g. `BLR-1`) |
-| `building_name` | string | Human-readable building name |
-| `city` | string | City the building is in |
-| `lob` | string | Line of Business occupying the building / tower |
-| `footfall` | integer | Number of people in office on that date |
-| `capacity` | integer | Total seat capacity of the tower (or building) |
+---
 
-**Optional columns** (present in sample data; absent = graceful degradation):
+#### Path A — Sample Data (fastest, one click)
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `tower_id` | string | Unique tower identifier (e.g. `BLR-1-TA`) |
-| `tower_name` | string | Human-readable tower name (e.g. `Tower A`) |
-| `floor_count` | integer | Number of floors in the tower (metadata; no UI filter) |
+Go to **⚙️ Admin → Use Sample Data → Load Sample Data**.
 
-`utilization_pct` is derived automatically: `footfall ÷ capacity` (clipped at 130%).
+The built-in dataset covers 12 buildings across 4 cities (Bangalore, Hyderabad, Chennai, Manila),
+7 LOBs, 2–3 floors per building, and 60 days of predicted attendance with holiday flags.
+All tabs activate instantly — use this for demos or to explore the tool before loading your own data.
 
-**Sample dataset:** 27 towers across 12 buildings in 4 cities (Bangalore, Hyderabad, Chennai, Manila) ·
-~9,855 rows (27 towers × 365 days) · Deterministic (seed = 42 — same data every load).
+---
 
-**Hierarchy:** City → Building (3 per city) → Tower (2–3 per building) → Floor (10 per tower, metadata only).
+#### Path B — Upload Your Own Data (4 files, in order)
 
-**Uploaded CSV:** Must include all 7 required columns above. Optional tower/floor columns are supported.
-Future-dated rows are used as projections. Historical-only files will show actuals, not forecasts, in horizon views.
+Go to **⚙️ Admin → Upload Your Data**. Each dataset has an expander with a **Download template** button.
+
+| Step | Dataset | File format | What to prepare |
+|------|---------|-------------|-----------------|
+| 1 | Floor Capacity | CSV or Excel | One row per floor — City, Building Name, Floor, Total Capacity |
+| 2 | Seat Allocation | CSV or Excel | One row per LOB × floor assignment — who sits where |
+| 3 | Total Headcount | CSV or Excel | One row per LOB — total HC across all locations |
+| 4 | 60-Day Prediction | CSV or Excel | Daily model output at floor × LOB granularity |
+
+Once all four files pass validation the datasets are **joined automatically** — no button press needed.
+
+---
+
+#### What each dataset unlocks
+
+| Dataset missing | Features that will not work |
+|---|---|
+| Any dataset | All tabs show "no data loaded" — all four are required together |
+| **Dataset 4 — 60-Day Prediction** | Short-Term View (30/60-day forecasts), Executive Dashboard charts, utilization heatmaps, Scenario Planner impact simulation — nothing time-series based works |
+| **Dataset 3 — Total Headcount** | Scenario Planner Mode B (RTO mandate & seat planning), static seat gap vs headcount |
+| **Dataset 2 — Seat Allocation** | Seat gap per LOB, over-allocation checks, LOB breakdown in floor cards |
+| **Dataset 1 — Floor Capacity** | Utilization % calculation (requires total capacity per floor) |
+
+> **Key dependency:** The **60-day prediction file (Dataset 4) is the engine of the entire app.**
+> Without it the 30-day and 60-day horizon views, all utilization KPIs, and the dashboard
+> attendance charts are unavailable — even if the other three datasets are loaded.
+
+---
+
+#### Switching datasets
+
+Use **Clear all data** in the Admin status banner to reset. Individual datasets can be replaced
+via the **Replace** button inside each dataset expander (Upload mode only).
 """)
 
-    with st.expander("2 · How the Horizon Works", expanded=True):
+    with st.expander("1 · Data Model — Four Inputs", expanded=True):
         st.markdown("""
-Both Short-Term and Long-Term views **slice the dataset** to a date window starting from today. No extrapolation is performed.
+This app requires **four datasets**, uploaded separately in the Admin tab.
 
-| Tab | Horizon option | Date range used |
-|-----|---------------|-----------------|
-| Short-Term | 30 days | `today ≤ date < today + 30` |
-| Short-Term | 60 days | `today ≤ date < today + 60` |
-| Long-Term | 6 months | `today ≤ date < today + 180` |
-| Long-Term | 12 months | `today ≤ date < today + 365` |
+---
+
+**Dataset 1 — Floor Capacity** *(static, Facilities-owned)*
+
+Physical seat inventory. Changes rarely.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `City` | string | City the building is in |
+| `Building Name` | string | Human-readable building name |
+| `Floor` | string / integer | Floor identifier (e.g. 3 or "Floor 3") |
+| `Total Capacity` | integer | Total physical seats on that floor |
+
+---
+
+**Dataset 2 — Seat Allocation** *(operational, CPG/Workplace-owned)*
+
+Who sits where. Multiple LOBs can share the same floor.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `LOB` | string | Line of Business |
+| `LOB Leader Name` | string | LOB leader responsible for that allocation |
+| `City` | string | |
+| `Building Name` | string | |
+| `Floor` | string / integer | |
+| `Allocated Seats` | integer | Seats owned by this LOB on this floor |
+
+A floor will have **multiple rows** when more than one LOB shares it.
+
+---
+
+**Dataset 3 — Total Headcount** *(HR snapshot)*
+
+LOB-level total headcount — not per-floor.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `LOB` | string | Line of Business |
+| `Leader` | string | LOB leader name |
+| `Headcount` | integer | Total HC for this LOB across all locations |
+
+---
+
+**Dataset 4 — 60-Day Prediction** *(model output, time-series)*
+
+Daily predicted attendance at **floor × LOB** granularity. This drives all charts and KPIs.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `Date` | date | Calendar date |
+| `Day` | string | Day-of-week name (Mon, Tue …) |
+| `City` | string | |
+| `Building` | string | Must match `Building Name` in DS1/DS2 |
+| `Floor` | string / integer | Must match `Floor` in DS1/DS2 |
+| `LOB` | string | Must match `LOB` in DS2/DS3 |
+| `Leader` | string | LOB leader name |
+| `Holiday Flag` | 0 / 1 | Public / national holiday |
+| `Optional Holiday Flag` | 0 / 1 | Org-optional holiday |
+| `Optional Holiday Name` | string | Name of the optional holiday (if flagged) |
+| `US Holiday Flag` | 0 / 1 | US-specific holiday marker |
+| `Employee Count Predicted` | integer | Predicted attendance for this LOB × floor × date |
+
+**Granularity:** `Date × City × Building × Floor × LOB`
+
+---
+
+**Join logic (auto-applied on load):**
+
+```
+DS4 + DS1  (on City + Building + Floor)
+    → utilization_pct = Employee Count Predicted / Total Capacity
+
+DS4 + DS2  (on City + Building + Floor + LOB)
+    → seat gap = Allocated Seats − Employee Count Predicted
+
+DS2 + DS1  (on City + Building + Floor)
+    → over-allocation check: SUM(Allocated Seats per floor) vs Total Capacity
+
+DS2 + DS3  (on LOB)
+    → static seat gap: Allocated Seats − Headcount (snapshot, not time-series)
+```
+""")
+
+    with st.expander("2 · Short-Term View — What It Shows", expanded=True):
+        st.markdown("""
+> **Requires Dataset 4 (60-Day Prediction).** Without it this tab shows "no data loaded"
+> regardless of whether the other three datasets are present.
+
+The Short-Term View slices the prediction dataset to the selected planning window.
+
+| Horizon option | Date range |
+|---|---|
+| 30 days | today → today + 30 |
+| 60 days | today → today + 60 |
 
 **All KPIs and charts use weekdays only (Mon–Fri).** Weekends are excluded from every calculation.
 
-**Why numbers change between horizons:** The sample data has a linear growth trend baked in.
-Days further in the future have a slightly higher footfall multiplier, so a 60-day window will show
-higher peak/avg values than a 30-day window for growing towers. Shrinking towers (e.g. TIDEL Park
-Operations, −4% growth) show the opposite.
+**4 KPI cards (top of tab):**
+
+| Card | What it shows |
+|---|---|
+| Peak Predicted | Highest single-day attendance across the portfolio in the window |
+| Avg Daily Predicted | Mean daily attendance across all weekdays |
+| Buildings >90% Peak | Count of buildings where any weekday exceeds 90% of capacity |
+| Buildings <60% Avg | Count of buildings averaging below 60% utilization |
+
+**Three detail expanders:**
+
+| Expander | Content |
+|---|---|
+| 🏢 Building Risk Details | Per-building risk tier (🔴/🟡/🔵/🟢), avg util %, peak util %, peak predicted seats |
+| 🏗️ Floor Utilization | Per-floor avg util %, peak util %, risk tier |
+| 👥 LOB Seat Gap (Allocation vs Headcount) | Static gap: `Allocated Seats − Total Headcount` per LOB — **not time-series** |
+
+> **LOB seat gap is a static snapshot**, not a per-day forecast. It answers: does each LOB have enough
+> allocated seats for its total headcount on paper? Negative = the LOB's headcount exceeds its seat allocation.
+
+**Key metrics computed:**
+
+| Metric | Formula |
+|---|---|
+| Floor utilization % | `Employee Count Predicted / Total Capacity` per floor per day |
+| LOB seat gap (static) | `Allocated Seats − Total Headcount` per LOB (snapshot, not time-series) |
+| Peak day | Day with highest total predicted attendance across selected scope |
+| Holiday impact | Days with any holiday flag set are shown in an info callout |
+
+**Additional charts (below insights):**
+
+| Chart | What it shows |
+|---|---|
+| Daily forecast line | Predicted daily attendance across the horizon with a capacity reference line |
+| Day-of-week bar | Average attendance by weekday (Mon–Fri) — identifies low-attendance days |
+| Capacity calendar | Calendar heat-map showing daily utilization colour-coded by risk tier |
 """)
 
-    with st.expander("3 · How Forecasting Works", expanded=True):
+    with st.expander("3 · Long-Term View", expanded=False):
         st.markdown("""
-**There is no statistical forecasting model** (no ARIMA, Holt-Winters, or Prophet) in this version.
+**Not available in this version.**
 
-The sample data is generated with a deterministic formula at load time:
-
-```
-footfall = base_demand × DOW_multiplier × trend_factor × noise
-
-base_demand    = base_utilization × capacity
-                 (e.g. 84% × 200 seats = 168 baseline seats for BLR-1-TA)
-
-trend_factor   = 1.0 + annual_growth_rate × (day_number / 365)
-                 (linear ramp; e.g. +16%/yr means day 365 = 1.16×)
-
-DOW_multiplier = Mon 0.85 · Tue 1.00 · Wed 1.00 · Thu 0.95 · Fri 0.75
-                 Sat 0.05 · Sun 0.02
-
-noise          = 1 + Normal(mean=0, std=0.08)   ← ±8% random variation
-                 seed = 42 → same numbers every load
-```
-
-**For uploaded data:** The app reads whatever footfall values are in your file. If your file contains
-future projections, those are displayed as-is. If it is historical only, the horizon views will be
-empty (no future rows to slice).
+The prediction file covers a maximum 60-day horizon. Long-term (6–12 month) views will be enabled
+once a longer-range model output is available.
 """)
 
-    with st.expander("4 · Scenario Planner Calculations", expanded=True):
+    with st.expander("4 · Scenario Planner", expanded=True):
         st.markdown("""
+> **Mode A** requires Dataset 4 (60-Day Prediction) for impact simulation.
+> **Mode B** requires Dataset 3 (Total Headcount) and Dataset 2 (Seat Allocation) for seat gap calculations.
+
 #### Mode A — Event Impact
 
-The baseline is your filtered dataset, unmodified. An adjustment multiplier is applied to footfall rows
-that fall **within the event date window** and **within the selected scope**:
+Applies an adjustment multiplier to predicted attendance rows that fall **within the event date window**
+and match the selected scope (portfolio-wide, specific buildings, or specific LOBs).
 
 ```
-combined_multiplier = event_mult_1 × event_mult_2 × … × (1 + custom_pct / 100)
+adjusted_footfall = Employee Count Predicted × combined_multiplier
 
-scenario_footfall = baseline_footfall × combined_multiplier
-    — applied only to: rows where date ∈ [event_start, event_end]
-                   AND building/LoB matches the selected scope
+combined_multiplier = event_mult_1 × event_mult_2 × … × (1 + custom_pct / 100)
 ```
 
 **Default event multipliers** (configurable in ⚙️ Admin → Scenario Adjustment Configuration):
 
 | Event | Default Multiplier | Effect |
-|-------|-----------|--------|
-| Townhall | ×1.20 | +20% footfall |
-| Leadership Visit | ×1.15 | +15% footfall |
-| Weather Alert | ×0.70 | −30% footfall |
-| Traffic / Local Disruption | ×0.80 | −20% footfall |
-| Mandatory Holiday | ×0.10 | −90% footfall |
-| Optional Holiday | ×0.60 | −40% footfall |
-| US Holiday | ×0.75 | −25% footfall |
-
-Admins can edit, add, or remove event types from the **Admin tab → Scenario Adjustment Configuration** section.
-Changes apply immediately without a data reload.
+|-------|-------------------|--------|
+| Townhall | ×1.20 | +20% attendance |
+| Leadership Visit | ×1.15 | +15% attendance |
+| Weather Alert | ×0.70 | −30% attendance |
+| Traffic / Local Disruption | ×0.80 | −20% attendance |
+| Mandatory Holiday | ×0.10 | −90% attendance |
+| Optional Holiday | ×0.60 | −40% attendance |
+| US Holiday | ×0.75 | −25% attendance |
 
 Multiple events combine multiplicatively: e.g. Townhall + Optional Holiday = 1.20 × 0.60 = ×0.72 (net −28%).
 
-**KPI cards** show **avg daily footfall (seats/day)** — the same unit as the chart Y-axis.
-The total person-days impact over the full event window is shown as a sub-caption.
+---
 
-#### Mode B — Policy Simulation
+#### Mode B — RTO & Seat Planning
 
-All footfall is scaled linearly relative to the baseline RTO assumption (3.5 days/week):
+The planner sets two levers and the tool computes how many seats each LOB needs.
+Calculation uses **Total Headcount** (Dataset 3) — not actual attendance — for a consistent planning baseline.
 
 ```
-scenario_footfall = baseline_footfall × (new_rto_days / 3.5)
+RTO fraction                    = RTO days per week / 5
+
+Expected daily demand (per LOB) = Total Headcount × RTO fraction
+
+Seats needed (per LOB)          = Expected daily demand / Target utilization %
+
+Seat gap (per LOB)              = Current Allocated Seats − Seats needed
+    Positive gap = surplus seats
+    Negative gap = seats deficit — need more allocation or fewer RTO days
 ```
 
-Seat gap per building = `capacity − (peak_footfall ÷ target_utilization%)`
-- Positive gap = surplus seats available
-- Negative gap = seats deficit (capacity expansion needed)
+**Example:** Engineering has 200 HC. RTO = 3 days/week → fraction = 3/5 = 60% → expects 120 people/day.
+Target utilization = 80% → needs `120 / 0.80 = 150` seats.
+Currently allocated 130 seats → gap = **−20** (deficit).
 
-#### Download Impact Report (.xlsx)
+**Levers:**
 
-Both modes offer a download button that generates a 4-sheet Excel workbook:
-- **Summary** — KPI metrics and mode parameters
-- **Building Impact** — per-building footfall delta table
-- **Daily Data** — day-by-day baseline vs scenario footfall + delta
-- **Insights** — structured insight bullets
+| Control | Range | What it means |
+|---|---|---|
+| RTO mandate | 1–5 days/week | How many days per week each LOB is expected in office |
+| Target utilization % | 50–95% | Planning buffer — lower % = more buffer seats |
+
+Headcount baseline comes from **Dataset 3 (Total Headcount)**. Allocated seats come from **Dataset 2 (Seat Allocation)**.
 """)
 
     with st.expander("5 · Risk Thresholds & Utilization", expanded=True):
         st.markdown("""
-**Utilization** is always computed as weekday footfall ÷ capacity, then averaged or peaked over the horizon window.
+**Utilization** = `Employee Count Predicted / Total Capacity` per floor per day (weekdays only).
 
 | Risk Label | Condition | Meaning |
 |------------|-----------|---------|
-| 🔴 Over Capacity | Peak utilization > 90% | At least one day exceeds 90% of capacity in the window |
+| 🔴 Over Capacity | Peak utilization > 90% | At least one weekday exceeds 90% of floor capacity |
 | 🟡 Watch | Avg utilization > 75% | Average occupancy is high — approaching constraint |
-| 🔵 Under-utilized | Avg utilization < 60% | Building is running well below capacity — consolidation candidate |
+| 🔵 Under-utilized | Avg utilization < 60% | Floor running well below capacity — consolidation candidate |
 | 🟢 Healthy | Everything else | Normal operating range |
 
-**"Peak"** = the single highest-footfall weekday within the horizon window.
+**"Peak"** = the single highest-footfall weekday in the selected horizon window.
 
-**"Avg"** = mean daily footfall across all weekdays in the horizon window.
+**"Avg"** = mean daily predicted attendance across all weekdays in the window.
 
-These thresholds are applied in:
-- Short-Term KPI cards ("Buildings >90%", "Buildings <60%")
-- Building Risk Details drilldown table
-- Auto-generated Insights bullets
-- Long-Term insights ("projected to exceed 90% avg utilization by…")
+**Over-allocation** (static check, separate from utilization):
+`SUM(Allocated Seats per floor) > Total Capacity` — a floor is over-allocated when LOBs have been
+assigned more seats in aggregate than the floor physically holds.
+
+**LOB seat gap (static):** `Allocated Seats − LOB Headcount` — answers whether an LOB has enough
+allocated seats for its current headcount, ignoring attendance patterns.
 """)
 
     with st.expander("6 · How Insights Are Generated", expanded=True):
         st.markdown("""
-Insights are rule-based bullets generated automatically from the data — no AI or language model is involved.
-Each tab uses a different set of rules, threshold checks, and templates. All cap at **5 bullets maximum**.
+Insights are **rule-based bullets** generated automatically from the data — no AI or language model involved.
 
 ---
 
 #### Short-Term Insights
 
-Computed by `generate_insights_short_term()`. Runs over the selected horizon window (30 or 60 days), weekdays only.
+Runs over the selected horizon (30 or 60 days), weekdays only.
 
-**Step 1 — Per-building stats computed:**
-```
-avg_util  = mean(footfall / capacity)  across all weekdays in window
-peak_util = max(footfall / capacity)   across all weekdays in window
-peak_date = date on which peak_util occurred
-```
+| Priority | Check | Threshold | Output |
+|---|---|---|---|
+| 1 | Over-capacity risk | avg utilization ≥ 85% | ⚠️ Building at risk with peak date |
+| 2 | Friday vs Wednesday dip | Always if both DOW values exist | 📉 DOW attendance pattern |
+| 3 | Under-utilized building | avg utilization < 60% | 📊 Consolidation candidate |
+| 4 (fallback) | No issues | — | ✅ All buildings within normal range |
 
-**Step 2 — Checks run in this priority order (first matches fill the 5-bullet cap):**
-
-| Priority | Check | Threshold | Template |
-|----------|-------|-----------|----------|
-| 1 (highest) | Over-capacity risk | avg_util ≥ **85%** | ⚠️ **{building}** projected at {X}% avg utilization — peak on {date} |
-| 2 | Friday vs Wednesday dip | Always shown if both DOW values exist | 📉 Friday footfall averages **{X}%** utilization vs **{Y}%** on Wednesday |
-| 3 | Under-utilized building | avg_util < **60%** | 📊 **{building}** under-utilized at {X}% average occupancy |
-| 4 (fallback) | No issues found | All above checks returned 0 results | ✅ All buildings within normal utilization range for this window. |
-
-Note: the over-capacity trigger here is avg ≥ **85%** (not 90%) — it fires earlier than the Risk label threshold to give advance warning.
-
----
-
-#### Long-Term Insights
-
-Computed by `generate_insights_long_term()`. Runs over the full horizon (6 or 12 months), weekdays only, grouped by **calendar month**.
-
-**Step 1 — Per-building monthly utilization computed:**
-```
-monthly_util = mean(footfall / capacity)  across all weekdays in each month
-               (one value per building per month)
-```
-
-**Step 2 — Checks run in this priority order:**
-
-| Priority | Check | Threshold | Template |
-|----------|-------|-----------|----------|
-| 1 (highest) | Capacity breach forecast | monthly_util ≥ **90%** in any month | ⚠️ **{building}** projected to exceed 90% avg utilization by **{first breach month}** |
-| 2 | Consolidation candidate | overall avg monthly_util < **55%** | 📊 **{building}** projected at only {X}% avg utilization over {N} months — consider consolidation |
-| 3 (fallback) | No issues found | — | ✅ Portfolio capacity appears balanced over the forecast horizon. |
+Note: over-capacity insight fires at avg ≥ **85%** (earlier than the 90% Risk label) to give advance warning.
+Insights operate at **building level**, not floor level.
 
 ---
 
 #### Scenario Planner — Live Impact Insights
 
-Computed by `compute_live_insights()`. Runs over the event date window, comparing baseline vs scenario DataFrames.
+Compares baseline prediction vs adjusted scenario over the event window.
 
-| # | Shown when | Calculation | Template |
-|---|------------|-------------|----------|
-| 1 | delta ≠ 0 | `sum(scenario) − sum(baseline)` in event window | 📊 This scenario **adds/reduces {X} total footfall** over the event period |
-| 2 | always | Count days where portfolio util > 90%, compare baseline vs scenario | ⚠️ **{N} additional peak-risk days** (>90% capacity) |
-| 3 | always | `total_delta / weekday_count` | 📅 Avg daily footfall change: **{±X} seats/day** |
-| 4 | any building impacted | `argmax(abs(per_building_delta))` | 🏢 Top impacted building: **{name}** ({±X}%) |
-| 5 | scope is narrowed | Count buildings/LoB matching scope | 🎯 Adjustment applies to **{N} of {M} buildings** |
+| # | Shown when | Output |
+|---|---|---|
+| 1 | delta ≠ 0 | Total attendance change over event period |
+| 2 | always | Count of additional peak-risk days (>90% capacity) |
+| 3 | always | Avg daily attendance change (seats/day) |
+| 4 | any building impacted | Top impacted building by % change |
+| 5 | scope narrowed | Count of buildings/LOBs affected |
 """)

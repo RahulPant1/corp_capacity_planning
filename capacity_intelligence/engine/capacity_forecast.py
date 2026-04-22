@@ -1,7 +1,20 @@
-"""Capacity Intelligence forecasting engine.
+"""Capacity Intelligence forecasting engine — 4-dataset model.
 
-All heavy computation lives here; app.py calls these functions and
-renders the results.  No Streamlit imports allowed in this file.
+Column conventions (matching ci_sample_data.py):
+  Date, Day, City, Building Name, Floor, LOB, Leader
+  Holiday Flag, Optional Holiday Flag, Optional Holiday Name, US Holiday Flag
+  Employee Count Predicted  ← the footfall signal
+  Total Capacity            ← from DS1 (per floor; SHARED across LOBs on same floor)
+  Allocated Seats           ← from DS2 (per LOB per floor)
+  Headcount                 ← from DS3 (per LOB, portfolio-wide)
+  Utilization Pct           ← Predicted / Capacity (clipped at 1.30)
+  Seat Gap                  ← Allocated Seats - Predicted
+  HC Gap                    ← Allocated Seats - Headcount
+
+Capacity aggregation rule:
+  Total Capacity is the same for all LOBs on the same floor.
+  Always de-duplicate on (City, Building Name, Floor) before summing capacity
+  to avoid counting a floor's capacity once per LOB.
 """
 
 from datetime import date
@@ -13,35 +26,83 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # ---------------------------------------------------------------------------
-# Scenario event multipliers (applied multiplicatively)
+# Column name constants
+# ---------------------------------------------------------------------------
+C_DATE      = "Date"
+C_CITY      = "City"
+C_BUILDING  = "Building Name"
+C_FLOOR     = "Floor"
+C_LOB       = "LOB"
+C_LEADER    = "Leader"
+C_PREDICTED = "Employee Count Predicted"
+C_CAPACITY  = "Total Capacity"
+C_ALLOC     = "Allocated Seats"
+C_HEADCOUNT = "Headcount"
+C_UTIL      = "Utilization Pct"
+C_SEAT_GAP  = "Seat Gap"
+C_HOL       = "Holiday Flag"
+C_OPT_HOL   = "Optional Holiday Flag"
+C_US_HOL    = "US Holiday Flag"
+
+FLOOR_KEY    = [C_CITY, C_BUILDING, C_FLOOR]
+BUILDING_KEY = [C_CITY, C_BUILDING]
+
+# ---------------------------------------------------------------------------
+# Scenario event multipliers
 # ---------------------------------------------------------------------------
 SCENARIO_MULTIPLIERS: Dict[str, float] = {
-    "townhall": 1.20,
-    "leadership_visit": 1.15,
-    "weather_alert": 0.70,
+    "townhall":           1.20,
+    "leadership_visit":   1.15,
+    "weather_alert":      0.70,
     "traffic_disruption": 0.80,
-    "mandatory_holiday": 0.10,
-    "optional_holiday": 0.60,
-    "us_holiday": 0.75,
+    "mandatory_holiday":  0.10,
+    "optional_holiday":   0.60,
+    "us_holiday":         0.75,
 }
+
+# Baseline RTO days/week baked into sample data (used only for display context)
+BASELINE_RTO_DAYS: float = 3.5
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _total_capacity(df: pd.DataFrame) -> int:
-    """Sum capacity across all unique entities.
+def _dedup_capacity(df: pd.DataFrame) -> int:
+    """Sum Total Capacity across unique (City, Building Name, Floor) rows.
 
-    Tower-aware: when tower_id column is present each tower row carries its own
-    capacity, so we group by tower_id.  Falls back to building_id for flat data.
+    Multiple LOBs share the same floor — de-duplicating prevents double-counting.
     """
-    if "tower_id" in df.columns:
-        return int(df.groupby("tower_id")["capacity"].first().sum())
-    return int(df.groupby("building_id")["capacity"].first().sum())
+    return int(df.drop_duplicates(subset=FLOOR_KEY)[C_CAPACITY].sum())
+
+
+def _building_daily(df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate daily_df to (Date, City, Building Name) with correct capacity.
+
+    Returns: Date, City, Building Name, predicted_sum, capacity
+    capacity is summed across unique floors (not across LOBs).
+    """
+    # Predicted: sum all LOBs on all floors per building per day
+    pred = (
+        df.groupby([C_DATE, C_CITY, C_BUILDING])[C_PREDICTED]
+        .sum()
+        .reset_index()
+        .rename(columns={C_PREDICTED: "predicted_sum"})
+    )
+    # Capacity: de-dup across LOBs before aggregating to building level
+    cap = (
+        df.drop_duplicates(subset=[C_DATE, *FLOOR_KEY])
+        .groupby([C_DATE, C_CITY, C_BUILDING])[C_CAPACITY]
+        .sum()
+        .reset_index()
+        .rename(columns={C_CAPACITY: "capacity"})
+    )
+    merged = pred.merge(cap, on=[C_DATE, C_CITY, C_BUILDING], how="left")
+    merged["util"] = merged["predicted_sum"] / merged["capacity"]
+    return merged
 
 
 # ---------------------------------------------------------------------------
-# Filtering helpers
+# Filtering and slicing
 # ---------------------------------------------------------------------------
 
 def filter_df(
@@ -50,63 +111,73 @@ def filter_df(
     cities: Optional[List[str]] = None,
     lobs: Optional[List[str]] = None,
 ) -> pd.DataFrame:
+    """Filter working DataFrame by building name(s), city, and/or LOB."""
     df = daily_df
     if buildings:
-        df = df[df["building_id"].isin(buildings)]
+        df = df[df[C_BUILDING].isin(buildings)]
     if cities:
-        df = df[df["city"].isin(cities)]
+        df = df[df[C_CITY].isin(cities)]
     if lobs:
-        df = df[df["lob"].isin(lobs)]
+        df = df[df[C_LOB].isin(lobs)]
     return df
 
 
+def get_data_anchor(daily_df: pd.DataFrame) -> date:
+    """Effective start date for horizon filtering.
+
+    Returns today if today falls within the loaded data's date range.
+    Falls back to the data's first date when today is outside the range
+    (e.g. the loaded file covers a past period or a future-dated export).
+    This ensures all views show data from the loaded dataset regardless of
+    when the app is being run.
+    """
+    data_min = daily_df[C_DATE].min().date()
+    data_max = daily_df[C_DATE].max().date()
+    today = date.today()
+    if data_min <= today <= data_max:
+        return today
+    return data_min
+
+
 def get_horizon_df(daily_df: pd.DataFrame, horizon_days: int = 30) -> pd.DataFrame:
-    today = pd.Timestamp(date.today())
-    end = today + pd.Timedelta(days=horizon_days)
-    return daily_df[(daily_df["date"] >= today) & (daily_df["date"] < end)]
+    anchor = pd.Timestamp(get_data_anchor(daily_df))
+    end = anchor + pd.Timedelta(days=horizon_days)
+    return daily_df[(daily_df[C_DATE] >= anchor) & (daily_df[C_DATE] < end)]
+
+
+def get_weekday_df(df: pd.DataFrame) -> pd.DataFrame:
+    return df[df[C_DATE].dt.dayofweek < 5]
 
 
 # ---------------------------------------------------------------------------
-# Short-term KPIs
+# Portfolio-level KPIs (short-term)
 # ---------------------------------------------------------------------------
 
 def compute_portfolio_kpis(
     daily_df: pd.DataFrame,
     horizon_days: int = 30,
-    metric: str = "peak",
 ) -> dict:
-    """Returns peak_footfall, avg_footfall, buildings_above_90, buildings_below_60, total_capacity."""
+    """Peak predicted, avg predicted, floors >90%, floors <60%, total capacity."""
     df = get_horizon_df(daily_df, horizon_days)
-    if df.empty:
+    weekday_df = get_weekday_df(df)
+    if weekday_df.empty:
         return {
-            "peak_footfall": 0,
-            "avg_footfall": 0,
-            "buildings_above_90": 0,
-            "buildings_below_60": 0,
+            "peak_footfall": 0, "avg_footfall": 0,
+            "buildings_above_90": 0, "buildings_below_60": 0,
             "total_capacity": 0,
         }
 
-    weekday_df = df[df["date"].dt.dayofweek < 5]
+    total_capacity = _dedup_capacity(df)
 
-    # Portfolio daily totals
-    daily_totals = (
-        weekday_df.groupby("date")
-        .agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
-        .reset_index()
-    )
-    peak_footfall = int(daily_totals["footfall"].max())
-    avg_footfall = int(daily_totals["footfall"].mean())
-    total_capacity = _total_capacity(df)
+    # Portfolio daily totals — sum predicted across all floors+LOBs
+    daily_totals = weekday_df.groupby(C_DATE)[C_PREDICTED].sum()
+    peak_footfall = int(daily_totals.max())
+    avg_footfall  = int(daily_totals.mean())
 
-    # Per-building utilisation stats
-    bldg_daily = (
-        weekday_df.groupby(["date", "building_id"])
-        .agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
-        .reset_index()
-    )
-    bldg_daily["util"] = bldg_daily["footfall"] / bldg_daily["capacity"]
+    # Per-building utilisation (correct capacity)
+    bldg_daily = _building_daily(weekday_df)
     bldg_stats = (
-        bldg_daily.groupby("building_id")
+        bldg_daily.groupby(BUILDING_KEY)
         .agg(avg_util=("util", "mean"), peak_util=("util", "max"))
         .reset_index()
     )
@@ -114,12 +185,88 @@ def compute_portfolio_kpis(
     buildings_below_60 = int((bldg_stats["avg_util"] < 0.60).sum())
 
     return {
-        "peak_footfall": peak_footfall,
-        "avg_footfall": avg_footfall,
+        "peak_footfall":     peak_footfall,
+        "avg_footfall":      avg_footfall,
         "buildings_above_90": buildings_above_90,
         "buildings_below_60": buildings_below_60,
-        "total_capacity": total_capacity,
+        "total_capacity":    total_capacity,
     }
+
+
+# ---------------------------------------------------------------------------
+# Floor-level KPIs
+# ---------------------------------------------------------------------------
+
+def compute_floor_utilization(
+    daily_df: pd.DataFrame,
+    horizon_days: int = 30,
+) -> pd.DataFrame:
+    """Per-floor utilization table over the horizon window.
+
+    Returns: City, Building Name, Floor, Avg Util %, Peak Util %, Risk
+    """
+    df = get_weekday_df(get_horizon_df(daily_df, horizon_days))
+    if df.empty:
+        return pd.DataFrame()
+
+    # Sum predictions across LOBs per floor per day, then stats over time
+    floor_day = (
+        df.groupby([C_DATE, *FLOOR_KEY])
+        .agg(predicted_sum=(C_PREDICTED, "sum"), capacity=(C_CAPACITY, "first"))
+        .reset_index()
+    )
+    floor_day["util"] = floor_day["predicted_sum"] / floor_day["capacity"]
+
+    floor_stats = (
+        floor_day.groupby(FLOOR_KEY)
+        .agg(
+            avg_util=("util", "mean"),
+            peak_util=("util", "max"),
+            capacity=("capacity", "first"),
+        )
+        .reset_index()
+    )
+    floor_stats["Avg Util %"]  = (floor_stats["avg_util"]  * 100).round(1)
+    floor_stats["Peak Util %"] = (floor_stats["peak_util"] * 100).round(1)
+    floor_stats["Risk"] = floor_stats["peak_util"].apply(
+        lambda u: "🔴 Over Capacity" if u > 0.90
+        else ("🟡 Watch" if u > 0.75 else ("🔵 Under-utilized" if u < 0.60 else "🟢 Healthy"))
+    )
+    return floor_stats[[*FLOOR_KEY, "Avg Util %", "Peak Util %", "Risk", "capacity"]]
+
+
+# ---------------------------------------------------------------------------
+# LOB seat gap table (static: allocation vs headcount)
+# ---------------------------------------------------------------------------
+
+def compute_lob_gap_table(daily_df: pd.DataFrame) -> pd.DataFrame:
+    """Static LOB-level gap: Allocated Seats vs Headcount.
+
+    Returns one row per LOB (summed across all floors/buildings).
+    Seat Gap = Allocated Seats - Headcount  (negative = deficit)
+    """
+    if C_ALLOC not in daily_df.columns or C_HEADCOUNT not in daily_df.columns:
+        return pd.DataFrame()
+
+    # Allocation per LOB — de-dup to one row per (LOB, building, floor)
+    alloc = (
+        daily_df.drop_duplicates(subset=[C_LOB, *FLOOR_KEY])
+        .groupby(C_LOB)[C_ALLOC]
+        .sum()
+        .reset_index()
+        .rename(columns={C_ALLOC: "Total Allocated"})
+    )
+    hc = (
+        daily_df.drop_duplicates(subset=C_LOB)
+        [[C_LOB, C_HEADCOUNT]]
+        .rename(columns={C_HEADCOUNT: "Headcount"})
+    )
+    df = alloc.merge(hc, on=C_LOB, how="left")
+    df["Seat Gap"] = df["Total Allocated"] - df["Headcount"]
+    df["Status"] = df["Seat Gap"].apply(
+        lambda x: "✅ Surplus" if x >= 0 else "🔴 Deficit"
+    )
+    return df.sort_values("Seat Gap")
 
 
 # ---------------------------------------------------------------------------
@@ -127,23 +274,28 @@ def compute_portfolio_kpis(
 # ---------------------------------------------------------------------------
 
 def compute_dow_averages(daily_df: pd.DataFrame, horizon_days: int = 30) -> pd.DataFrame:
-    df = get_horizon_df(daily_df, horizon_days).copy()
+    df = get_weekday_df(get_horizon_df(daily_df, horizon_days)).copy()
     if df.empty:
         return pd.DataFrame(columns=["day_of_week", "day_name", "avg_footfall", "avg_util_pct"])
 
-    df["day_of_week"] = df["date"].dt.dayofweek
-    df["day_name"] = df["date"].dt.day_name()
+    df["day_of_week"] = df[C_DATE].dt.dayofweek
+    df["day_name"]    = df[C_DATE].dt.day_name()
 
-    by_day = (
-        df.groupby(["date", "day_of_week", "day_name"])
-        .agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
+    # Portfolio daily totals with correct capacity
+    bldg_day = _building_daily(df)
+    bldg_day["day_of_week"] = bldg_day[C_DATE].dt.dayofweek
+    bldg_day["day_name"]    = bldg_day[C_DATE].dt.day_name()
+
+    portfolio_day = (
+        bldg_day.groupby([C_DATE, "day_of_week", "day_name"])
+        .agg(predicted=("predicted_sum", "sum"), capacity=("capacity", "sum"))
         .reset_index()
     )
-    by_day["util_pct"] = by_day["footfall"] / by_day["capacity"] * 100
+    portfolio_day["util_pct"] = portfolio_day["predicted"] / portfolio_day["capacity"] * 100
 
     dow_avg = (
-        by_day.groupby(["day_of_week", "day_name"])
-        .agg(avg_footfall=("footfall", "mean"), avg_util_pct=("util_pct", "mean"))
+        portfolio_day.groupby(["day_of_week", "day_name"])
+        .agg(avg_footfall=("predicted", "mean"), avg_util_pct=("util_pct", "mean"))
         .reset_index()
         .sort_values("day_of_week")
     )
@@ -155,136 +307,55 @@ def compute_dow_averages(daily_df: pd.DataFrame, horizon_days: int = 30) -> pd.D
 # ---------------------------------------------------------------------------
 
 def compute_monthly_utilization(daily_df: pd.DataFrame) -> pd.DataFrame:
-    """Returns long-form DataFrame: building_id, building_name, month_label, util_pct."""
-    df = daily_df[daily_df["date"].dt.dayofweek < 5].copy()
-    df["year_month"] = df["date"].dt.to_period("M")
+    """Building × Month utilization — used by heatmap chart."""
+    df = get_weekday_df(daily_df).copy()
+    df["year_month"] = df[C_DATE].dt.to_period("M")
 
-    # Aggregate to building-day level first so tower rows are correctly summed
-    bldg_day = (
-        df.groupby(["year_month", "date", "building_id", "building_name"])
-        .agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
-        .reset_index()
-    )
+    bldg_day = _building_daily(df)
+    bldg_day["year_month"] = bldg_day[C_DATE].dt.to_period("M")
+
     monthly = (
-        bldg_day.groupby(["year_month", "building_id", "building_name"])
-        .agg(avg_footfall=("footfall", "mean"), capacity=("capacity", "first"))
+        bldg_day.groupby([C_CITY, C_BUILDING, "year_month"])
+        .agg(avg_predicted=("predicted_sum", "mean"), capacity=("capacity", "first"))
         .reset_index()
     )
-    monthly["util_pct"] = (monthly["avg_footfall"] / monthly["capacity"] * 100).clip(upper=120)
+    monthly["util_pct"]    = (monthly["avg_predicted"] / monthly["capacity"] * 100).clip(upper=120)
     monthly["month_label"] = monthly["year_month"].dt.strftime("%b %Y")
-    monthly["month_order"] = monthly["year_month"].apply(lambda p: str(p))
+    monthly["month_order"] = monthly["year_month"].apply(str)
+    monthly["building_name"] = monthly[C_BUILDING]  # alias for chart compat
     return monthly
 
 
 # ---------------------------------------------------------------------------
-# Long-term KPIs
-# ---------------------------------------------------------------------------
-
-def compute_long_term_kpis(daily_df: pd.DataFrame, horizon_months: int = 12) -> dict:
-    today = pd.Timestamp(date.today())
-    end = today + pd.Timedelta(days=horizon_months * 30)
-    df = daily_df[(daily_df["date"] >= today) & (daily_df["date"] < end)]
-    weekday_df = df[df["date"].dt.dayofweek < 5]
-
-    if weekday_df.empty:
-        return {"avg_monthly_footfall": 0, "avg_util_pct": 0.0, "surplus_seats": 0, "buildings_below_50": 0, "total_capacity": 0}
-
-    total_cap = _total_capacity(df)
-
-    daily_totals = (
-        weekday_df.groupby("date")
-        .agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
-        .reset_index()
-    )
-    avg_daily_footfall = daily_totals["footfall"].mean()
-    avg_util_pct = round((daily_totals["footfall"] / daily_totals["capacity"]).mean() * 100, 1)
-    surplus_seats = int(total_cap - avg_daily_footfall)
-
-    bldg_util = (
-        weekday_df.groupby("building_id")
-        .apply(lambda g: (g["footfall"] / g["capacity"]).mean())
-    )
-    buildings_below_50 = int((bldg_util < 0.50).sum())
-
-    # Avg monthly footfall = avg working-day footfall × 20 working days
-    avg_monthly_footfall = int(avg_daily_footfall * 20)
-
-    return {
-        "avg_monthly_footfall": avg_monthly_footfall,
-        "avg_util_pct": avg_util_pct,
-        "surplus_seats": surplus_seats,
-        "buildings_below_50": buildings_below_50,
-        "total_capacity": total_cap,
-    }
-
-
-# ---------------------------------------------------------------------------
-# City-level capacity metrics table
-# ---------------------------------------------------------------------------
-
-def compute_city_capacity_metrics(daily_df: pd.DataFrame, horizon_months: int = 12) -> pd.DataFrame:
-    today = pd.Timestamp(date.today())
-    end = today + pd.Timedelta(days=horizon_months * 30)
-    df = daily_df[(daily_df["date"] >= today) & (daily_df["date"] < end)]
-    weekday_df = df[df["date"].dt.dayofweek < 5]
-    if weekday_df.empty:
-        return pd.DataFrame(columns=["City", "Utilization %", "Surplus", "Deficit"])
-
-    records = []
-    for city, grp in weekday_df.groupby("city"):
-        city_cap = _total_capacity(grp)
-        daily_city = grp.groupby("date")["footfall"].sum()
-        avg_daily = daily_city.mean()
-        util_pct = round(avg_daily / city_cap * 100, 1)
-        surplus = int(city_cap - avg_daily)
-        deficit = max(0, -surplus)
-        records.append({
-            "City": city,
-            "Utilization %": f"{util_pct}%",
-            "Surplus": f"+{surplus}" if surplus >= 0 else str(surplus),
-            "Deficit": f"-{deficit}" if deficit > 0 else "0",
-        })
-
-    return pd.DataFrame(records).sort_values("City")
-
-
-# ---------------------------------------------------------------------------
-# Insights generation
+# Insights
 # ---------------------------------------------------------------------------
 
 def generate_insights_short_term(daily_df: pd.DataFrame, horizon_days: int = 30) -> List[str]:
-    df = get_horizon_df(daily_df, horizon_days)
-    weekday_df = df[df["date"].dt.dayofweek < 5]
-    if weekday_df.empty:
+    df = get_weekday_df(get_horizon_df(daily_df, horizon_days))
+    if df.empty:
         return ["No forecast data available for this selection."]
 
-    insights = []
-
-    # Aggregate to building-day level first so tower rows are correctly summed
-    bldg_day = (
-        weekday_df.groupby(["date", "building_id", "building_name"])
-        .agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
-        .reset_index()
-    )
-    bldg_day["util"] = bldg_day["footfall"] / bldg_day["capacity"]
+    bldg_day = _building_daily(df)
 
     def _bldg_stats(g):
-        peak_idx = g["util"].idxmax()
+        peak_idx  = g["util"].idxmax()
         return pd.Series({
-            "avg_util": g["util"].mean(),
+            "avg_util":  g["util"].mean(),
             "peak_util": g["util"].max(),
-            "peak_date": g.loc[peak_idx, "date"].strftime("%b %d"),
+            "peak_date": g.loc[peak_idx, C_DATE].strftime("%b %d"),
         })
 
     bldg_stats = (
-        bldg_day.groupby(["building_id", "building_name"])[["date", "util"]]
+        bldg_day.groupby(BUILDING_KEY)[["util", C_DATE]]
         .apply(_bldg_stats)
         .reset_index()
     )
 
+    insights = []
+
     for _, row in bldg_stats[bldg_stats["avg_util"] >= 0.85].iterrows():
         insights.append(
-            f"⚠️ **{row['building_name']}** projected at {row['avg_util']*100:.0f}% avg utilization "
+            f"⚠️ **{row[C_BUILDING]}** projected at {row['avg_util']*100:.0f}% avg utilization "
             f"— peak on {row['peak_date']}"
         )
 
@@ -300,7 +371,7 @@ def generate_insights_short_term(daily_df: pd.DataFrame, horizon_days: int = 30)
 
     for _, row in bldg_stats[bldg_stats["avg_util"] < 0.60].iterrows():
         insights.append(
-            f"📊 **{row['building_name']}** under-utilized at {row['avg_util']*100:.0f}% average occupancy"
+            f"📊 **{row[C_BUILDING]}** under-utilized at {row['avg_util']*100:.0f}% average occupancy"
         )
 
     if not insights:
@@ -309,57 +380,8 @@ def generate_insights_short_term(daily_df: pd.DataFrame, horizon_days: int = 30)
     return insights[:5]
 
 
-def generate_insights_long_term(daily_df: pd.DataFrame, horizon_months: int = 12) -> List[str]:
-    today = pd.Timestamp(date.today())
-    end = today + pd.Timedelta(days=horizon_months * 30)
-    df = daily_df[(daily_df["date"] >= today) & (daily_df["date"] < end)]
-    weekday_df = df[df["date"].dt.dayofweek < 5]
-    if weekday_df.empty:
-        return ["No long-term forecast available for this selection."]
-
-    weekday_df = weekday_df.copy()
-    weekday_df["year_month"] = weekday_df["date"].dt.to_period("M")
-
-    insights = []
-
-    # Aggregate to building-day level first so tower rows are correctly summed
-    bldg_day_lt = (
-        weekday_df.groupby(["date", "building_id", "building_name", "year_month"])
-        .agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
-        .reset_index()
-    )
-    bldg_day_lt["util"] = bldg_day_lt["footfall"] / bldg_day_lt["capacity"]
-    bldg_monthly = (
-        bldg_day_lt.groupby(["building_id", "building_name", "year_month"])
-        .agg(monthly_util=("util", "mean"))
-        .reset_index()
-    )
-
-    breach = bldg_monthly[bldg_monthly["monthly_util"] >= 0.90]
-    for bldg_id in breach["building_id"].unique():
-        rows = breach[breach["building_id"] == bldg_id]
-        first_month = str(rows["year_month"].min())
-        bldg_name = rows["building_name"].iloc[0]
-        insights.append(
-            f"⚠️ **{bldg_name}** projected to exceed 90% avg utilization by **{first_month}**"
-        )
-
-    bldg_avg = bldg_monthly.groupby(["building_id", "building_name"])["monthly_util"].mean()
-    for (_, bldg_name), avg_util in bldg_avg.items():
-        if avg_util < 0.55:
-            insights.append(
-                f"📊 **{bldg_name}** projected at only {avg_util*100:.0f}% avg utilization "
-                f"over {horizon_months} months — consider consolidation"
-            )
-
-    if not insights:
-        insights.append("✅ Portfolio capacity appears balanced over the forecast horizon.")
-
-    return insights[:5]
-
-
 # ---------------------------------------------------------------------------
-# Scenario adjustments
+# Scenario adjustments (Mode A — Event Impact)
 # ---------------------------------------------------------------------------
 
 def apply_scenario_adjustments(
@@ -369,25 +391,13 @@ def apply_scenario_adjustments(
     custom_factor_pct: float = 0.0,
     scope: str = "all",
     scope_values: Optional[List[str]] = None,
-    # Deprecated: use scope + scope_values instead
-    building_filter: Optional[List[str]] = None,
-    lob_filter: Optional[List[str]] = None,
-    # Override multipliers (e.g. from Admin config); falls back to SCENARIO_MULTIPLIERS
     scenario_multipliers: Optional[Dict[str, float]] = None,
 ) -> pd.DataFrame:
-    # Backward-compat: map old params to new scope model
-    if building_filter and scope == "all":
-        scope = "buildings"
-        scope_values = building_filter
-    elif lob_filter and scope == "all":
-        scope = "lob"
-        scope_values = lob_filter
-
     _mults = scenario_multipliers if scenario_multipliers is not None else SCENARIO_MULTIPLIERS
 
     df = daily_df.copy()
     start_ts = pd.Timestamp(date_range[0])
-    end_ts = pd.Timestamp(date_range[1])
+    end_ts   = pd.Timestamp(date_range[1])
 
     combined_mult = 1.0
     for key, selected in adjustments.items():
@@ -396,15 +406,19 @@ def apply_scenario_adjustments(
     if custom_factor_pct != 0.0:
         combined_mult *= 1.0 + custom_factor_pct / 100.0
 
-    mask = (df["date"] >= start_ts) & (df["date"] <= end_ts)
+    mask = (df[C_DATE] >= start_ts) & (df[C_DATE] <= end_ts)
     if scope == "buildings" and scope_values:
-        mask &= df["building_id"].isin(scope_values)
+        mask &= df[C_BUILDING].isin(scope_values)
     elif scope == "lob" and scope_values:
-        mask &= df["lob"].isin(scope_values)
-    # scope == "all" or empty scope_values → no additional filter
+        mask &= df[C_LOB].isin(scope_values)
 
-    df.loc[mask, "footfall"] = (df.loc[mask, "footfall"] * combined_mult).round().astype(int).clip(lower=0)
-    df["utilization_pct"] = (df["footfall"] / df["capacity"]).clip(upper=1.30)
+    df.loc[mask, C_PREDICTED] = (
+        df.loc[mask, C_PREDICTED] * combined_mult
+    ).round().astype(int).clip(lower=0)
+
+    df[C_UTIL] = (df[C_PREDICTED] / df[C_CAPACITY]).clip(upper=1.30).round(3)
+    if C_SEAT_GAP in df.columns:
+        df[C_SEAT_GAP] = df[C_ALLOC] - df[C_PREDICTED]
     return df
 
 
@@ -416,18 +430,17 @@ def compute_live_insights(
     scope_values: Optional[List[str]] = None,
     capacity_threshold: float = 0.90,
 ) -> List[str]:
-    """Generate live quantified impact bullets for Mode A event adjustments."""
     start_ts = pd.Timestamp(date_range[0])
-    end_ts = pd.Timestamp(date_range[1])
+    end_ts   = pd.Timestamp(date_range[1])
 
-    base_win = baseline_df[(baseline_df["date"] >= start_ts) & (baseline_df["date"] <= end_ts)]
-    scen_win = scenario_df[(scenario_df["date"] >= start_ts) & (scenario_df["date"] <= end_ts)]
+    base_win = baseline_df[(baseline_df[C_DATE] >= start_ts) & (baseline_df[C_DATE] <= end_ts)]
+    scen_win = scenario_df[(scenario_df[C_DATE] >= start_ts) & (scenario_df[C_DATE] <= end_ts)]
 
     if base_win.empty:
         return ["ℹ️ No data in the selected event period."]
 
-    base_total = int(base_win["footfall"].sum())
-    scen_total = int(scen_win["footfall"].sum())
+    base_total = int(base_win[C_PREDICTED].sum())
+    scen_total = int(scen_win[C_PREDICTED].sum())
     delta = scen_total - base_total
 
     if delta == 0:
@@ -435,68 +448,69 @@ def compute_live_insights(
 
     insights = []
 
-    # 1. Total footfall delta
     direction = "adds" if delta > 0 else "reduces"
     insights.append(
-        f"📊 This scenario **{direction} {abs(delta):,} total footfall** over the event period"
+        f"📊 This scenario **{direction} {abs(delta):,} total predicted attendance** over the event period"
     )
 
-    # 2. Additional peak-risk days
-    base_daily = base_win.groupby("date").agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
-    scen_daily = scen_win.groupby("date").agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
-    base_daily["util"] = base_daily["footfall"] / base_daily["capacity"]
-    scen_daily["util"] = scen_daily["footfall"] / scen_daily["capacity"]
-    base_risk_days = int((base_daily["util"] > capacity_threshold).sum())
-    scen_risk_days = int((scen_daily["util"] > capacity_threshold).sum())
-    risk_delta = scen_risk_days - base_risk_days
+    # Peak-risk days (building level, correct capacity)
+    base_bldg = _building_daily(base_win)
+    scen_bldg = _building_daily(scen_win)
+    base_daily_port = base_bldg.groupby(C_DATE).apply(
+        lambda g: g["predicted_sum"].sum() / g["capacity"].sum()
+    )
+    scen_daily_port = scen_bldg.groupby(C_DATE).apply(
+        lambda g: g["predicted_sum"].sum() / g["capacity"].sum()
+    )
+    base_risk = int((base_daily_port > capacity_threshold).sum())
+    scen_risk = int((scen_daily_port > capacity_threshold).sum())
+    risk_delta = scen_risk - base_risk
     pct_label = int(capacity_threshold * 100)
+
     if risk_delta > 0:
         insights.append(
             f"⚠️ **{risk_delta} additional peak-risk day{'s' if risk_delta != 1 else ''}** "
-            f"(>{pct_label}% capacity) — up from {base_risk_days} baseline"
+            f"(>{pct_label}% capacity) — up from {base_risk} baseline"
         )
     elif risk_delta < 0:
         insights.append(
             f"✅ **{abs(risk_delta)} fewer peak-risk day{'s' if abs(risk_delta) != 1 else ''}** "
-            f"(>{pct_label}% capacity) — down from {base_risk_days} baseline"
+            f"(>{pct_label}% capacity) — down from {base_risk} baseline"
         )
     else:
         insights.append(
-            f"ℹ️ Peak-risk days unchanged at **{base_risk_days}** day{'s' if base_risk_days != 1 else ''} (>{pct_label}% capacity)"
+            f"ℹ️ Peak-risk days unchanged at **{base_risk}** (>{pct_label}% capacity)"
         )
 
-    # 3. Avg daily footfall change
-    window_days = base_daily.shape[0]
+    window_days = base_bldg[C_DATE].nunique()
     if window_days > 0:
         avg_delta = delta / window_days
         insights.append(
             f"📅 Avg daily footfall change: **{avg_delta:+,.0f} seats/day** over {window_days} event day{'s' if window_days != 1 else ''}"
         )
 
-    # 4. Top impacted building
-    per_bldg_base = base_win.groupby(["building_id", "building_name"])["footfall"].sum()
-    per_bldg_scen = scen_win.groupby(["building_id", "building_name"])["footfall"].sum()
+    # Top impacted building
+    per_bldg_base = base_win.groupby(C_BUILDING)[C_PREDICTED].sum()
+    per_bldg_scen = scen_win.groupby(C_BUILDING)[C_PREDICTED].sum()
     diff = per_bldg_scen - per_bldg_base
     if not diff.empty and diff.abs().max() > 0:
-        top_idx = diff.abs().idxmax()
-        top_diff = diff[top_idx]
-        top_base = per_bldg_base.get(top_idx, 0)
-        top_name = top_idx[1] if isinstance(top_idx, tuple) else str(top_idx)
+        top_bldg = diff.abs().idxmax()
+        top_diff = int(diff[top_bldg])
+        top_base = int(per_bldg_base.get(top_bldg, 0))
         if top_base > 0:
             top_pct = top_diff / top_base * 100
             insights.append(
-                f"🏢 Top impacted building: **{top_name}** ({top_pct:+.0f}%, {top_diff:+,.0f} seats)"
+                f"🏢 Top impacted building: **{top_bldg}** ({top_pct:+.0f}%, {top_diff:+,.0f} seats)"
             )
 
-    # 5. Scope coverage (only when narrowed)
-    total_buildings = baseline_df["building_id"].nunique()
+    total_buildings = baseline_df[C_BUILDING].nunique()
     if scope == "buildings" and scope_values:
-        scoped_n = len([v for v in scope_values if v in baseline_df["building_id"].unique()])
+        scoped_n = len([v for v in scope_values if v in baseline_df[C_BUILDING].unique()])
         insights.append(
             f"🎯 Adjustment applies to **{scoped_n} of {total_buildings} building{'s' if total_buildings != 1 else ''}**"
         )
     elif scope == "lob" and scope_values:
-        scoped_bldgs = baseline_df[baseline_df["lob"].isin(scope_values)]["building_id"].nunique()
+        scoped_bldgs = baseline_df[baseline_df[C_LOB].isin(scope_values)][C_BUILDING].nunique()
         lob_str = ", ".join(scope_values[:3]) + ("…" if len(scope_values) > 3 else "")
         insights.append(
             f"🎯 Adjustment applies to **{scoped_bldgs} of {total_buildings} building{'s' if total_buildings != 1 else ''}** (LoB: {lob_str})"
@@ -511,31 +525,29 @@ def compute_scenario_kpis(
     date_range: Tuple,
 ) -> dict:
     start_ts = pd.Timestamp(date_range[0])
-    end_ts = pd.Timestamp(date_range[1])
+    end_ts   = pd.Timestamp(date_range[1])
 
-    def _totals(df, weekdays_only=False):
-        sliced = df[(df["date"] >= start_ts) & (df["date"] <= end_ts)]
-        if weekdays_only:
-            sliced = sliced[sliced["date"].dt.dayofweek < 5]
-        return sliced.groupby("date")["footfall"].sum()
+    def _slice(df, weekdays=False):
+        s = df[(df[C_DATE] >= start_ts) & (df[C_DATE] <= end_ts)]
+        if weekdays:
+            s = get_weekday_df(s)
+        return s.groupby(C_DATE)[C_PREDICTED].sum()
 
-    base_all = _totals(baseline_df, weekdays_only=False)
-    base_wday = _totals(baseline_df, weekdays_only=True)
-    scen_wday = _totals(scenario_df, weekdays_only=True)
+    base_all  = _slice(baseline_df, weekdays=False)
+    base_wday = _slice(baseline_df, weekdays=True)
+    scen_wday = _slice(scenario_df,  weekdays=True)
 
-    baseline_total = int(base_all.sum())
-    scenario_total = int(_totals(scenario_df, weekdays_only=False).sum())
     window_weekdays = int(base_wday.shape[0])
-    window_days = int(base_all.shape[0])
+    window_days     = int(base_all.shape[0])
 
     return {
-        "baseline_footfall": baseline_total,
-        "scenario_footfall": scenario_total,
-        "delta": scenario_total - baseline_total,
+        "baseline_footfall":  int(base_all.sum()),
+        "scenario_footfall":  int(_slice(scenario_df).sum()),
+        "delta":              int(_slice(scenario_df).sum()) - int(base_all.sum()),
         "baseline_avg_daily": round(base_wday.sum() / window_weekdays) if window_weekdays else 0,
         "scenario_avg_daily": round(scen_wday.sum() / window_weekdays) if window_weekdays else 0,
-        "window_days": window_days,
-        "window_weekdays": window_weekdays,
+        "window_days":        window_days,
+        "window_weekdays":    window_weekdays,
     }
 
 
@@ -545,23 +557,89 @@ def compute_building_impact_table(
     date_range: Tuple,
 ) -> pd.DataFrame:
     start_ts = pd.Timestamp(date_range[0])
-    end_ts = pd.Timestamp(date_range[1])
+    end_ts   = pd.Timestamp(date_range[1])
 
     def agg(df):
         return (
-            df[(df["date"] >= start_ts) & (df["date"] <= end_ts)]
-            .groupby(["building_id", "building_name"])
-            .agg(total=("footfall", "sum"))
+            df[(df[C_DATE] >= start_ts) & (df[C_DATE] <= end_ts)]
+            .groupby(C_BUILDING)[C_PREDICTED]
+            .sum()
             .reset_index()
         )
 
-    base_agg = agg(baseline_df).rename(columns={"total": "Baseline Forecast"})
-    scen_agg = agg(scenario_df).rename(columns={"total": "Scenario Forecast"})
-    merged = base_agg.merge(scen_agg, on=["building_id", "building_name"])
+    base_agg = agg(baseline_df).rename(columns={C_PREDICTED: "Baseline Forecast"})
+    scen_agg = agg(scenario_df).rename(columns={C_PREDICTED: "Scenario Forecast"})
+    merged = base_agg.merge(scen_agg, on=C_BUILDING)
     merged["Difference"] = merged["Scenario Forecast"] - merged["Baseline Forecast"]
-    return merged.rename(columns={"building_name": "Building"})[
+    return merged.rename(columns={C_BUILDING: "Building"})[
         ["Building", "Baseline Forecast", "Scenario Forecast", "Difference"]
     ]
+
+
+# ---------------------------------------------------------------------------
+# Mode B — RTO Mandate & Seat Planning
+# ---------------------------------------------------------------------------
+
+def compute_rto_seat_plan(
+    daily_df: pd.DataFrame,
+    rto_pct: float,
+    target_util: float,
+) -> pd.DataFrame:
+    """HC × RTO% → seats needed per LOB; gap vs current allocated seats.
+
+    Args:
+        daily_df:    Working DataFrame (must contain Headcount and Allocated Seats).
+        rto_pct:     Fraction of HC expected in office (e.g. 0.60 = 60%).
+        target_util: Planning buffer (e.g. 0.80 = plan for 80% seat utilization).
+
+    Returns one row per LOB:
+        LOB | Headcount | Expected Daily Demand | Allocated Seats | Seats Needed | Seat Gap | Status
+    """
+    if C_HEADCOUNT not in daily_df.columns or C_ALLOC not in daily_df.columns:
+        return pd.DataFrame()
+
+    hc = (
+        daily_df.drop_duplicates(subset=C_LOB)
+        [[C_LOB, C_HEADCOUNT]]
+        .copy()
+    )
+    alloc = (
+        daily_df.drop_duplicates(subset=[C_LOB, *FLOOR_KEY])
+        .groupby(C_LOB)[C_ALLOC]
+        .sum()
+        .reset_index()
+        .rename(columns={C_ALLOC: "Allocated Seats"})
+    )
+    df = hc.merge(alloc, on=C_LOB, how="left")
+    df["Expected Daily Demand"] = (df[C_HEADCOUNT] * rto_pct).round().astype(int)
+    df["Seats Needed"] = (
+        df["Expected Daily Demand"] / max(target_util, 0.01)
+    ).round().astype(int)
+    df["Seat Gap"] = df["Allocated Seats"] - df["Seats Needed"]
+    df["Status"]   = df["Seat Gap"].apply(
+        lambda x: "✅ Surplus" if x >= 0 else "🔴 Deficit"
+    )
+    return df[[C_LOB, C_HEADCOUNT, "Expected Daily Demand", "Allocated Seats", "Seats Needed", "Seat Gap", "Status"]].sort_values("Seat Gap")
+
+
+def compute_policy_kpis(
+    daily_df: pd.DataFrame,
+    rto_pct: float,
+    target_util: float,
+) -> dict:
+    """Portfolio-level summary for Mode B RTO planning."""
+    plan = compute_rto_seat_plan(daily_df, rto_pct, target_util)
+    if plan.empty:
+        return {"total_hc": 0, "expected_demand": 0, "total_allocated": 0,
+                "total_seats_needed": 0, "portfolio_gap": 0}
+
+    return {
+        "total_hc":           int(plan[C_HEADCOUNT].sum()),
+        "expected_demand":    int(plan["Expected Daily Demand"].sum()),
+        "total_allocated":    int(plan["Allocated Seats"].sum()),
+        "total_seats_needed": int(plan["Seats Needed"].sum()),
+        "portfolio_gap":      int(plan["Seat Gap"].sum()),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -569,33 +647,33 @@ def compute_building_impact_table(
 # ---------------------------------------------------------------------------
 
 def plot_daily_forecast(daily_df: pd.DataFrame, horizon_days: int = 30) -> go.Figure:
-    """Line chart: daily total footfall vs total capacity over the horizon."""
+    """Line chart: portfolio daily predicted attendance vs total capacity."""
     df = get_horizon_df(daily_df, horizon_days)
     if df.empty:
         return go.Figure()
 
+    bldg_day = _building_daily(df)
     daily = (
-        df.groupby("date")
-        .agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
+        bldg_day.groupby(C_DATE)
+        .agg(predicted=("predicted_sum", "sum"), capacity=("capacity", "sum"))
         .reset_index()
     )
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=daily["date"], y=daily["footfall"],
-        mode="lines", name="Forecasted Footfall",
+        x=daily[C_DATE], y=daily["predicted"],
+        mode="lines", name="Predicted Attendance",
         line=dict(color="#1a3c5e", width=2),
         fill="tozeroy", fillcolor="rgba(26,60,94,0.08)",
     ))
     fig.add_trace(go.Scatter(
-        x=daily["date"], y=daily["capacity"],
-        mode="lines", name="Capacity Limit",
+        x=daily[C_DATE], y=daily["capacity"],
+        mode="lines", name="Total Capacity",
         line=dict(color="#dc3545", width=2, dash="dot"),
     ))
     fig.update_layout(
-        title=f"Daily Forecasted Footfall vs Capacity — Next {horizon_days} Days",
-        xaxis_title="Date",
-        yaxis_title="Seats",
+        title=f"Daily Predicted Attendance vs Capacity — Next {horizon_days} Days",
+        xaxis_title="Date", yaxis_title="Seats",
         legend=dict(orientation="h", y=-0.2),
         height=320,
         margin=dict(l=10, r=10, t=40, b=10),
@@ -605,7 +683,7 @@ def plot_daily_forecast(daily_df: pd.DataFrame, horizon_days: int = 30) -> go.Fi
 
 
 def plot_dow_bar(dow_df: pd.DataFrame) -> go.Figure:
-    """Bar chart: average footfall by day of week."""
+    """Bar chart: average attendance by day of week."""
     if dow_df.empty:
         return go.Figure()
 
@@ -613,7 +691,6 @@ def plot_dow_bar(dow_df: pd.DataFrame) -> go.Figure:
         "#dc3545" if u > 90 else "#ffc107" if u > 75 else "#1a3c5e"
         for u in dow_df["avg_util_pct"]
     ]
-
     fig = go.Figure(go.Bar(
         x=dow_df["day_name"],
         y=dow_df["avg_util_pct"].round(1),
@@ -624,7 +701,7 @@ def plot_dow_bar(dow_df: pd.DataFrame) -> go.Figure:
     fig.add_hline(y=90, line_dash="dot", line_color="#dc3545",
                   annotation_text="90% threshold", annotation_position="right")
     fig.update_layout(
-        title="Avg Footfall by Day of Week (% Utilization)",
+        title="Avg Attendance by Day of Week (% Utilization)",
         xaxis_title="", yaxis_title="Avg Utilization %",
         yaxis=dict(range=[0, 115]),
         height=300,
@@ -634,62 +711,40 @@ def plot_dow_bar(dow_df: pd.DataFrame) -> go.Figure:
 
 
 def plot_capacity_calendar(daily_df: pd.DataFrame, horizon_days: int = 30) -> go.Figure:
-    """Calendar grid coloured by the same 4-tier utilization bands as the heatmap.
-
-    Tiers (matching plot_building_heatmap):
-      < 60%  — very light blue-grey  ↓  Under-utilised
-      60–75% — light green           ✓  Healthy
-      75–85% — amber                 !  Watch
-      > 85%  — red                   ▲  Over-capacity
-      Weekend — light grey (no attendance expected)
-    """
+    """Calendar grid coloured by 4-tier utilization bands."""
     df = get_horizon_df(daily_df, horizon_days)
     if df.empty:
         return go.Figure()
 
+    bldg_day = _building_daily(df)
     daily = (
-        df.groupby("date")
-        .agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
+        bldg_day.groupby(C_DATE)
+        .agg(predicted=("predicted_sum", "sum"), capacity=("capacity", "sum"))
         .reset_index()
     )
-    daily["util_pct"] = daily["footfall"] / daily["capacity"] * 100
-    daily["dow"] = daily["date"].dt.dayofweek   # 0=Mon
-    daily["week"] = daily["date"].apply(
-        lambda d: (d - daily["date"].min()).days // 7
-    )
+    daily["util_pct"] = daily["predicted"] / daily["capacity"] * 100
+    daily["dow"]  = daily[C_DATE].dt.dayofweek
+    daily["week"] = daily[C_DATE].apply(lambda d: (d - daily[C_DATE].min()).days // 7)
 
-    # ── 4-tier colour palette (same as heatmap) ───────────────────────────
     def cell_color(u, is_weekend):
-        if is_weekend:
-            return "#f0f0f0"
-        if u > 85:
-            return "#e06c6c"
-        if u > 75:
-            return "#f6c94e"
-        if u > 60:
-            return "#a8d5a2"
+        if is_weekend: return "#f0f0f0"
+        if u > 85:     return "#e06c6c"
+        if u > 75:     return "#f6c94e"
+        if u > 60:     return "#a8d5a2"
         return "#dde8f0"
 
     def text_color(u, is_weekend):
-        if is_weekend:
-            return "#bbbbbb"
-        if u > 85:
-            return "#7b1a1a"
-        if u > 75:
-            return "#856404"
-        if u > 60:
-            return "#155724"
+        if is_weekend: return "#bbbbbb"
+        if u > 85:     return "#7b1a1a"
+        if u > 75:     return "#856404"
+        if u > 60:     return "#155724"
         return "#4a6585"
 
     def tier_symbol(u, is_weekend):
-        if is_weekend:
-            return ""
-        if u > 85:
-            return "▲"
-        if u > 75:
-            return "!"
-        if u > 60:
-            return "✓"
+        if is_weekend: return ""
+        if u > 85:     return "▲"
+        if u > 75:     return "!"
+        if u > 60:     return "✓"
         return "↓"
 
     dow_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -697,18 +752,17 @@ def plot_capacity_calendar(daily_df: pd.DataFrame, horizon_days: int = 30) -> go
 
     for _, row in daily.iterrows():
         week = int(row["week"])
-        dow = int(row["dow"])
+        dow  = int(row["dow"])
         util = row["util_pct"]
         is_weekend = dow >= 5
 
-        bg = cell_color(util, is_weekend)
-        fg = text_color(util, is_weekend)
+        bg  = cell_color(util, is_weekend)
+        fg  = text_color(util, is_weekend)
         sym = tier_symbol(util, is_weekend)
-
-        if is_weekend:
-            cell_text = row["date"].strftime("%b %d")
-        else:
-            cell_text = f"{row['date'].strftime('%b %d')}<br>{util:.0f}% {sym}"
+        cell_text = (
+            row[C_DATE].strftime("%b %d") if is_weekend
+            else f"{row[C_DATE].strftime('%b %d')}<br>{util:.0f}% {sym}"
+        )
 
         fig.add_shape(
             type="rect",
@@ -718,37 +772,27 @@ def plot_capacity_calendar(daily_df: pd.DataFrame, horizon_days: int = 30) -> go
             line=dict(color="white", width=2),
         )
         fig.add_annotation(
-            x=dow, y=week,
-            text=cell_text,
-            showarrow=False,
-            font=dict(size=12, color=fg),
+            x=dow, y=week, text=cell_text,
+            showarrow=False, font=dict(size=12, color=fg),
         )
 
-    # ── Tier legend (bottom annotations) ──────────────────────────────────
     legend_items = [
-        ("↓ <60% Under",    "#dde8f0", "#4a6585"),
+        ("↓ <60% Under",     "#dde8f0", "#4a6585"),
         ("✓ 60–75% Healthy", "#a8d5a2", "#155724"),
         ("! 75–85% Watch",   "#f6c94e", "#856404"),
         ("▲ >85% Risk",      "#e06c6c", "#7b1a1a"),
     ]
     for i, (label, bg, fg) in enumerate(legend_items):
         fig.add_annotation(
-            x=i * 1.75, y=-0.75,
-            xref="x", yref="y",
+            x=i * 1.75, y=-0.75, xref="x", yref="y",
             text=f"<span style='background:{bg};color:{fg};padding:2px 5px'>{label}</span>",
-            showarrow=False,
-            font=dict(size=11),
+            showarrow=False, font=dict(size=11),
         )
 
     n_weeks = int(daily["week"].max()) + 1
     fig.update_layout(
         title=f"Capacity Calendar — Next {horizon_days} Days",
-        xaxis=dict(
-            tickmode="array",
-            tickvals=list(range(7)),
-            ticktext=dow_labels,
-            range=[-0.6, 6.6],
-        ),
+        xaxis=dict(tickmode="array", tickvals=list(range(7)), ticktext=dow_labels, range=[-0.6, 6.6]),
         yaxis=dict(
             tickmode="array",
             tickvals=list(range(n_weeks)),
@@ -763,78 +807,42 @@ def plot_capacity_calendar(daily_df: pd.DataFrame, horizon_days: int = 30) -> go
 
 
 def plot_building_heatmap(monthly_df: pd.DataFrame) -> go.Figure:
-    """Building × Month utilization heatmap with 4-tier discrete colour bands.
-
-    Tiers:
-      < 60%  — very light blue-grey  (under-utilised)
-      60–75% — light green           (healthy)
-      75–85% — amber                 (watch)
-      > 85%  — red                   (over-capacity risk)
-    """
+    """Building × Month utilization heatmap with 4-tier discrete colour bands."""
     if monthly_df.empty:
         return go.Figure()
 
-    # Chronological column order
     month_order = (
         monthly_df[["month_label", "month_order"]]
         .drop_duplicates()
         .sort_values("month_order")["month_label"]
         .tolist()
     )
-
-    # Pivot: buildings as rows, months as columns
     pivot = monthly_df.pivot_table(
-        index="building_name",
-        columns="month_label",
-        values="util_pct",
-        aggfunc="mean",
+        index="building_name", columns="month_label",
+        values="util_pct", aggfunc="mean",
     )
     cols_present = [c for c in month_order if c in pivot.columns]
     pivot = pivot[cols_present]
-
-    # Sort buildings by average utilization descending (highest risk at top)
     pivot = pivot.loc[pivot.mean(axis=1).sort_values(ascending=False).index]
 
     n_buildings = len(pivot)
-    n_months = len(cols_present)
 
-    # ── Discrete 4-tier colorscale ────────────────────────────────────────
-    # Each band defined by a pair of identical colours at (start, end-ε)
-    # so Plotly produces flat blocks rather than a gradient.
-    # zmin=0, zmax=100 → normalised positions: 0.60, 0.75, 0.85
     COLORSCALE = [
-        [0.000, "#dde8f0"], [0.599, "#dde8f0"],  # <60%  : very light blue-grey
-        [0.600, "#a8d5a2"], [0.749, "#a8d5a2"],  # 60-75%: light green
-        [0.750, "#f6c94e"], [0.849, "#f6c94e"],  # 75-85%: amber
-        [0.850, "#e06c6c"], [1.000, "#c0392b"],  # >85%  : red
+        [0.000, "#dde8f0"], [0.599, "#dde8f0"],
+        [0.600, "#a8d5a2"], [0.749, "#a8d5a2"],
+        [0.750, "#f6c94e"], [0.849, "#f6c94e"],
+        [0.850, "#e06c6c"], [1.000, "#c0392b"],
     ]
-
-    # ── Annotation text: value + tier label ──────────────────────────────
-    z_values = pivot.values
-
-    def _tier(v):
-        if v < 60:
-            return "↓"   # under-utilised
-        if v < 75:
-            return "✓"   # healthy
-        if v < 85:
-            return "!"    # watch
-        return "▲"        # over-capacity
-
+    z_values   = pivot.values
     text_matrix = [
-        [f"{v:.0f}%\n{_tier(v)}" if not pd.isna(v) else "" for v in row]
+        [f"{v:.0f}%\n{'↓' if v<60 else '✓' if v<75 else '!' if v<85 else '▲'}" if not pd.isna(v) else "" for v in row]
         for row in z_values
     ]
 
     fig = go.Figure(go.Heatmap(
-        z=z_values,
-        x=cols_present,
-        y=pivot.index.tolist(),
-        text=text_matrix,
-        texttemplate="%{text}",
-        colorscale=COLORSCALE,
-        zmin=0,
-        zmax=100,
+        z=z_values, x=cols_present, y=pivot.index.tolist(),
+        text=text_matrix, texttemplate="%{text}",
+        colorscale=COLORSCALE, zmin=0, zmax=100,
         showscale=True,
         colorbar=dict(
             title="Util %",
@@ -845,7 +853,6 @@ def plot_building_heatmap(monthly_df: pd.DataFrame) -> go.Figure:
         hovertemplate="<b>%{y}</b><br>%{x}<br>Utilization: %{z:.1f}%<extra></extra>",
     ))
 
-    # Tier legend as subtitle annotations
     tier_labels = [
         ("◼ <60% Under-utilised", "#dde8f0", "#333"),
         ("◼ 60–75% Healthy",      "#a8d5a2", "#155724"),
@@ -854,67 +861,20 @@ def plot_building_heatmap(monthly_df: pd.DataFrame) -> go.Figure:
     ]
     for i, (label, bg, fg) in enumerate(tier_labels):
         fig.add_annotation(
-            x=1.18 + 0.0, y=1.08 - i * 0.06,
-            xref="paper", yref="paper",
+            x=1.18, y=1.08 - i * 0.06, xref="paper", yref="paper",
             text=f"<span style='color:{fg}'>{label}</span>",
-            showarrow=False,
-            font=dict(size=10),
-            xanchor="left",
+            showarrow=False, font=dict(size=10), xanchor="left",
         )
 
-    row_height = 42  # px per building row
     fig.update_layout(
         title="Monthly Utilization by Building",
-        height=max(320, n_buildings * row_height + 80),
+        height=max(320, n_buildings * 42 + 80),
         margin=dict(l=10, r=180, t=60, b=40),
         xaxis=dict(side="top", tickangle=-30),
         yaxis=dict(autorange="reversed"),
         font=dict(size=11),
     )
     fig.update_traces(textfont=dict(size=10, color="black"))
-    return fig
-
-
-def plot_monthly_forecast_simple(daily_df: pd.DataFrame) -> go.Figure:
-    """Simpler monthly forecast using direct groupby (avoids nested lambda)."""
-    df = daily_df[daily_df["date"].dt.dayofweek < 5].copy()
-    if df.empty:
-        return go.Figure()
-
-    df["year_month"] = df["date"].dt.to_period("M")
-    # First aggregate by date to get daily totals, then average by month
-    daily_totals = df.groupby(["date", "year_month"]).agg(
-        footfall=("footfall", "sum"),
-        capacity=("capacity", "sum"),
-    ).reset_index()
-    monthly = daily_totals.groupby("year_month").agg(
-        avg_footfall=("footfall", "mean"),
-        avg_capacity=("capacity", "mean"),
-    ).reset_index()
-    monthly["month_label"] = monthly["year_month"].dt.strftime("%b %Y")
-    monthly = monthly.sort_values("year_month")
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=monthly["month_label"], y=monthly["avg_footfall"].round(),
-        mode="lines+markers", name="Avg Daily Footfall",
-        line=dict(color="#1a3c5e", width=2.5),
-        fill="tozeroy", fillcolor="rgba(26,60,94,0.08)",
-        marker=dict(size=6),
-    ))
-    fig.add_trace(go.Scatter(
-        x=monthly["month_label"], y=monthly["avg_capacity"],
-        mode="lines", name="Capacity",
-        line=dict(color="#dc3545", width=2, dash="dot"),
-    ))
-    fig.update_layout(
-        title="Monthly Avg Daily Footfall vs Capacity",
-        xaxis_title="", yaxis_title="Avg Daily Seats",
-        legend=dict(orientation="h", y=-0.25),
-        height=320,
-        margin=dict(l=10, r=10, t=40, b=10),
-        hovermode="x unified",
-    )
     return fig
 
 
@@ -925,57 +885,47 @@ def plot_scenario_wedge(
     horizon_days: int = 60,
 ) -> go.Figure:
     """Baseline vs scenario split-line chart with shaded wedge."""
-    today = pd.Timestamp(date.today())
-    end = today + pd.Timedelta(days=horizon_days)
+    today    = pd.Timestamp(get_data_anchor(baseline_df))
+    end      = today + pd.Timedelta(days=horizon_days)
     start_ts = pd.Timestamp(date_range[0])
-    end_ts = pd.Timestamp(date_range[1])
+    end_ts   = pd.Timestamp(date_range[1])
 
     def daily_totals(df):
         return (
-            df[(df["date"] >= today) & (df["date"] < end)]
-            .groupby("date")
-            .agg(footfall=("footfall", "sum"))
+            df[(df[C_DATE] >= today) & (df[C_DATE] < end)]
+            .groupby(C_DATE)[C_PREDICTED]
+            .sum()
             .reset_index()
         )
 
-    base = daily_totals(baseline_df)
-    scen = daily_totals(scenario_df)
-    merged = base.merge(scen, on="date", suffixes=("_base", "_scen"))
+    base  = daily_totals(baseline_df)
+    scen  = daily_totals(scenario_df)
+    merged = base.merge(scen, on=C_DATE, suffixes=("_base", "_scen"))
 
     fig = go.Figure()
-
-    # Shaded wedge area
     fig.add_trace(go.Scatter(
-        x=pd.concat([merged["date"], merged["date"][::-1]]),
-        y=pd.concat([merged["footfall_scen"], merged["footfall_base"][::-1]]),
-        fill="toself",
-        fillcolor="rgba(26,60,94,0.10)",
+        x=pd.concat([merged[C_DATE], merged[C_DATE][::-1]]),
+        y=pd.concat([merged[f"{C_PREDICTED}_scen"], merged[f"{C_PREDICTED}_base"][::-1]]),
+        fill="toself", fillcolor="rgba(26,60,94,0.10)",
         line=dict(color="rgba(255,255,255,0)"),
-        showlegend=False,
-        hoverinfo="skip",
+        showlegend=False, hoverinfo="skip",
     ))
-
-    # Baseline line
     fig.add_trace(go.Scatter(
-        x=merged["date"], y=merged["footfall_base"],
-        mode="lines", name="Baseline Footfall",
+        x=merged[C_DATE], y=merged[f"{C_PREDICTED}_base"],
+        mode="lines", name="Baseline",
         line=dict(color="#6c757d", width=2.5),
     ))
-
-    # Scenario line
     fig.add_trace(go.Scatter(
-        x=merged["date"], y=merged["footfall_scen"],
-        mode="lines", name="Scenario Footfall",
+        x=merged[C_DATE], y=merged[f"{C_PREDICTED}_scen"],
+        mode="lines", name="Scenario",
         line=dict(color="#1a3c5e", width=2.5, dash="dash"),
     ))
-
-    # Vertical markers for scenario window
     for dt in [start_ts, end_ts]:
         if today <= dt < end:
             fig.add_vline(x=dt, line_dash="dot", line_color="#ffc107", line_width=1.5)
 
     fig.update_layout(
-        title="Scenario Impact — Baseline vs Adjusted Footfall",
+        title="Scenario Impact — Baseline vs Adjusted Attendance",
         xaxis_title="Date", yaxis_title="Total Seats",
         legend=dict(orientation="h", y=-0.2),
         height=340,
@@ -985,151 +935,33 @@ def plot_scenario_wedge(
     return fig
 
 
-# ---------------------------------------------------------------------------
-# Policy Simulation (RTO mandate / seat allocation target)
-# ---------------------------------------------------------------------------
+def plot_rto_seat_plan(plan_df: pd.DataFrame) -> go.Figure:
+    """Horizontal bar chart: allocated seats vs seats needed per LOB."""
+    if plan_df.empty:
+        return go.Figure()
 
-BASELINE_RTO_DAYS: float = 3.5  # weighted avg baked into sample data
-
-
-def simulate_rto_policy(
-    daily_df: pd.DataFrame,
-    new_rto_days: float,
-    baseline_rto_days: float = BASELINE_RTO_DAYS,
-) -> pd.DataFrame:
-    """Return a copy of daily_df with footfall scaled by new_rto / baseline_rto.
-
-    Increasing RTO mandate → footfall goes up proportionally.
-    Decreasing → footfall goes down.
-    """
-    if baseline_rto_days <= 0:
-        return daily_df.copy()
-    scale = new_rto_days / baseline_rto_days
-    df = daily_df.copy()
-    df["footfall"] = (df["footfall"] * scale).round().astype(int).clip(lower=0)
-    df["utilization_pct"] = (df["footfall"] / df["capacity"]).clip(upper=1.30)
-    return df
-
-
-def compute_seat_gap_by_building(
-    daily_df: pd.DataFrame,
-    target_utilization: float = 0.80,
-    horizon_days: int = 30,
-) -> pd.DataFrame:
-    """Per building: seats_needed = peak_footfall / target_utilization; gap = capacity - seats_needed.
-
-    Returns: Building | Current Capacity | Seats Needed | Surplus / Deficit
-    """
-    df = get_horizon_df(daily_df, horizon_days)
-    weekday_df = df[df["date"].dt.dayofweek < 5]
-    if weekday_df.empty:
-        return pd.DataFrame(
-            columns=["Building", "Current Capacity", "Seats Needed", "Surplus / Deficit"]
-        )
-
-    target_util = max(0.01, target_utilization)
-
-    # Aggregate to building-day level first so tower rows are correctly summed
-    bldg_day = (
-        weekday_df.groupby(["date", "building_id", "building_name"])
-        .agg(footfall=("footfall", "sum"), capacity=("capacity", "sum"))
-        .reset_index()
-    )
-    bldg = (
-        bldg_day.groupby(["building_id", "building_name"])
-        .agg(
-            peak_footfall=("footfall", "max"),
-            avg_footfall=("footfall", "mean"),
-            capacity=("capacity", "first"),
-        )
-        .reset_index()
-    )
-    bldg["Seats Needed"] = (bldg["peak_footfall"] / target_util).round().astype(int)
-    bldg["Surplus / Deficit"] = bldg["capacity"] - bldg["Seats Needed"]
-    return bldg.rename(columns={"building_name": "Building", "capacity": "Current Capacity"})[
-        ["Building", "Current Capacity", "Seats Needed", "Surplus / Deficit"]
-    ]
-
-
-def compute_policy_kpis(
-    baseline_df: pd.DataFrame,
-    policy_df: pd.DataFrame,
-    target_utilization: float = 0.80,
-    horizon_days: int = 30,
-) -> dict:
-    """Compare baseline vs policy scenario: demand change + portfolio seat gap."""
-    def avg_daily(df):
-        wdf = get_horizon_df(df, horizon_days)
-        wdf = wdf[wdf["date"].dt.dayofweek < 5]
-        if wdf.empty:
-            return 0.0
-        return wdf.groupby("date")["footfall"].sum().mean()
-
-    base_demand = avg_daily(baseline_df)
-    policy_demand = avg_daily(policy_df)
-
-    # Portfolio seat gap under new policy
-    gap_df = compute_seat_gap_by_building(policy_df, target_utilization, horizon_days)
-    if gap_df.empty:
-        portfolio_gap = 0
-    else:
-        portfolio_gap = int(gap_df["Surplus / Deficit"].sum())
-
-    total_cap = _total_capacity(get_horizon_df(policy_df, horizon_days))
-
-    return {
-        "base_demand": int(base_demand),
-        "policy_demand": int(policy_demand),
-        "demand_delta": int(policy_demand - base_demand),
-        "portfolio_gap": portfolio_gap,
-        "total_capacity": total_cap,
-    }
-
-
-def plot_rto_comparison(
-    baseline_df: pd.DataFrame,
-    policy_df: pd.DataFrame,
-) -> go.Figure:
-    """Two monthly footfall lines: current policy (gray solid) vs new RTO policy (blue dashed)."""
-
-    def monthly_series(df):
-        wdf = df[df["date"].dt.dayofweek < 5].copy()
-        wdf["year_month"] = wdf["date"].dt.to_period("M")
-        daily = (
-            wdf.groupby(["date", "year_month"])
-            .agg(footfall=("footfall", "sum"))
-            .reset_index()
-        )
-        return (
-            daily.groupby("year_month")
-            .agg(avg_footfall=("footfall", "mean"))
-            .reset_index()
-            .sort_values("year_month")
-            .assign(month_label=lambda d: d["year_month"].dt.strftime("%b %Y"))
-        )
-
-    base_m = monthly_series(baseline_df)
-    policy_m = monthly_series(policy_df)
+    lobs     = plan_df[C_LOB].tolist()
+    needed   = plan_df["Seats Needed"].tolist()
+    alloc    = plan_df["Allocated Seats"].tolist()
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=base_m["month_label"], y=base_m["avg_footfall"].round(),
-        mode="lines+markers", name="Current Policy",
-        line=dict(color="#6c757d", width=2.5),
-        marker=dict(size=5),
+    fig.add_trace(go.Bar(
+        name="Allocated Seats", y=lobs, x=alloc,
+        orientation="h",
+        marker_color="#6c757d",
     ))
-    fig.add_trace(go.Scatter(
-        x=policy_m["month_label"], y=policy_m["avg_footfall"].round(),
-        mode="lines+markers", name="New RTO Policy",
-        line=dict(color="#1a3c5e", width=2.5, dash="dash"),
-        marker=dict(size=5),
+    fig.add_trace(go.Bar(
+        name="Seats Needed (RTO plan)", y=lobs, x=needed,
+        orientation="h",
+        marker_color="#1a3c5e",
+        opacity=0.85,
     ))
     fig.update_layout(
-        title="Monthly Avg Daily Footfall — Current vs New RTO Policy",
-        xaxis_title="", yaxis_title="Avg Daily Seats",
+        barmode="overlay",
+        title="Allocated Seats vs Seats Needed by LOB",
+        xaxis_title="Seats", yaxis_title="",
         legend=dict(orientation="h", y=-0.2),
-        height=320,
+        height=max(280, len(lobs) * 40 + 80),
         margin=dict(l=10, r=10, t=40, b=10),
-        hovermode="x unified",
     )
     return fig

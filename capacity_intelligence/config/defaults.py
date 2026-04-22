@@ -12,6 +12,9 @@ Constants are grouped into two sections:
 # Working days per week (for RTO ratio calculation)
 WORKING_DAYS_PER_WEEK = 5
 
+# Set to True to show the Long-Term View tab once a 6-12 month prediction model is available.
+ENABLE_LONG_TERM_VIEW = False
+
 # ---------------------------------------------------------------------------
 # Scenario Planner — event adjustment multipliers
 # Each entry: {event_key: {"label": display_name, "multiplier": float}}
@@ -98,19 +101,3 @@ PLANNING_BUFFER_PRESETS = {
     "conservative": {"peak_buffer_multiplier": 1.4, "shrink_contribution_factor": 0.3},
 }
 DEFAULT_PLANNING_BUFFER = "balanced"  # for_future: allocation_engine
-
-# ---------------------------------------------------------------------------
-# Scenario Planner — event adjustment multipliers
-# Each entry: {event_key: {"label": display_name, "multiplier": float}}
-# Multiplier > 1.0 increases footfall; < 1.0 decreases footfall.
-# Admins can override these at runtime via the Admin tab.
-# ---------------------------------------------------------------------------
-DEFAULT_SCENARIO_MULTIPLIERS = {
-    "townhall":           {"label": "Townhall",                   "multiplier": 1.20},
-    "leadership_visit":   {"label": "Leadership Visit",           "multiplier": 1.15},
-    "weather_alert":      {"label": "Weather Alert",              "multiplier": 0.70},
-    "traffic_disruption": {"label": "Traffic / Local Disruption", "multiplier": 0.80},
-    "mandatory_holiday":  {"label": "Mandatory Holiday",          "multiplier": 0.10},
-    "optional_holiday":   {"label": "Optional Holiday",           "multiplier": 0.60},
-    "us_holiday":         {"label": "US Holiday",                 "multiplier": 0.75},
-}

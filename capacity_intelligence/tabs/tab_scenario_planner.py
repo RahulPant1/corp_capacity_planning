@@ -1,4 +1,25 @@
-"""Scenario Planner tab — Event Impact (Mode A) and Policy Simulation (Mode B)."""
+"""Scenario Planner tab.
+
+Reads:  st.session_state["ci_data_loaded"], ["ci_daily_df"], ["ci_scenario_multipliers"]
+Writes: nothing  (multipliers are written by Admin tab, not here)
+
+Mode A — Event Impact
+  Applies multipliers to predicted attendance for a chosen date window and scope.
+  Multipliers are loaded from ci_scenario_multipliers (runtime-editable via Admin tab)
+  with DEFAULT_SCENARIO_MULTIPLIERS from config/defaults.py as the fallback.
+  Formula: adjusted = predicted × mult_1 × mult_2 × … × (1 + custom_pct/100)
+
+Mode B — RTO & Seat Planning
+  Computes seats needed from Total Headcount × RTO fraction, where:
+    rto_fraction = rto_days / 5   (slider is 1–5 days/week, NOT a percentage)
+  Uses Total Headcount (DS3) — never actual attendance — for planning consistency.
+  Formula: seats_needed = (HC × rto_fraction) / target_utilization
+
+To add a new event type: edit DEFAULT_SCENARIO_MULTIPLIERS in config/defaults.py,
+or use Admin → Scenario Adjustment Configuration at runtime.
+
+To add a Mode C: follow the radio pattern at the top, add an `elif` branch below.
+"""
 
 
 def render() -> None:
@@ -6,149 +27,120 @@ def render() -> None:
     import pandas as pd
     from datetime import date, timedelta
     from engine.capacity_forecast import (
+        C_DATE, C_CITY, C_BUILDING, C_LOB, C_PREDICTED, C_CAPACITY,
         filter_df,
+        get_data_anchor,
         apply_scenario_adjustments,
         compute_scenario_kpis,
         compute_building_impact_table,
         compute_live_insights,
         plot_scenario_wedge,
-        simulate_rto_policy,
-        compute_seat_gap_by_building,
+        compute_rto_seat_plan,
         compute_policy_kpis,
-        plot_rto_comparison,
-        BASELINE_RTO_DAYS,
+        plot_rto_seat_plan,
     )
     from engine.scenario_report import generate_scenario_excel_report
     from config.defaults import DEFAULT_SCENARIO_MULTIPLIERS
 
     if not st.session_state.get("ci_data_loaded", False):
-        st.info("No data loaded. Go to the **⚙️ Admin** tab to load sample data or upload a CSV.")
+        st.info("No data loaded. Go to the **⚙️ Admin** tab to load sample data or upload files.")
         return
 
     daily_df: pd.DataFrame = st.session_state["ci_daily_df"]
-    buildings_meta: list = st.session_state["ci_buildings_meta"]
-    bldg_id_to_name = {b["building_id"]: b["building_name"] for b in buildings_meta}
-    all_lobs = sorted(daily_df["lob"].unique().tolist())
+    all_lobs  = sorted(daily_df[C_LOB].unique().tolist())
+    all_bldgs = sorted(daily_df[C_BUILDING].unique().tolist())
 
-    # Read configurable multipliers from session state (set in Admin tab)
     mults_config: dict = st.session_state.get("ci_scenario_multipliers", DEFAULT_SCENARIO_MULTIPLIERS)
     flat_mults = {k: v["multiplier"] for k, v in mults_config.items()}
 
-    # Mode selector
+    # ── Mode selector ──────────────────────────────────────────────────────
     sp_mode = st.radio(
         "Scenario mode",
-        ["Event Impact", "Policy Simulation"],
+        ["Event Impact", "RTO & Seat Planning"],
         horizontal=True,
         key="sp_mode",
         help=(
             "Event Impact: model a specific disruption or event over a date window. "
-            "Policy Simulation: model structural RTO mandate or allocation changes."
+            "RTO & Seat Planning: compute seat needs from HC × RTO mandate %."
         ),
     )
-    st.divider()
-
     # ===========================================================================
     # MODE A — EVENT IMPACT
     # ===========================================================================
     if sp_mode == "Event Impact":
-        col_controls, col_impact = st.columns([3, 7])
+        col_ctrl, col_impact = st.columns([3, 7])
 
-        with col_controls:
-            st.markdown("### Event Controls")
+        with col_ctrl:
+            st.markdown('<p class="section-header">Event Controls</p>', unsafe_allow_html=True)
 
-            sel_lobs_a = st.multiselect("Filter: Line of Business", all_lobs, key="sp_lob_a")
-            sel_bldgs_a = st.multiselect(
-                "Filter: Building",
-                options=[b["building_id"] for b in buildings_meta],
-                format_func=lambda x: bldg_id_to_name.get(x, x),
-                key="sp_bldg_a",
-            )
+            sel_lobs_a  = st.multiselect("Filter: Line of Business", all_lobs, key="sp_lob_a")
+            sel_bldgs_a = st.multiselect("Filter: Building", all_bldgs, key="sp_bldg_a")
 
-            st.markdown("")
+
             st.markdown("**Adjustment Scope**")
-            st.caption("Apply adjustments to the whole portfolio or target specific buildings / lines of business.")
+            st.caption("Apply adjustments to the whole portfolio or target specific buildings / LOBs.")
             scope_choice = st.radio(
-                "Apply adjustments to",
-                ["📦 Portfolio-wide", "🏢 Specific Buildings", "👥 Specific LoB"],
+                "Apply to",
+                ["Portfolio-wide", "Specific Buildings", "Specific LoB"],
                 horizontal=False,
                 key="sp_scope_mode",
             )
-            if scope_choice == "🏢 Specific Buildings":
-                scope_vals = st.multiselect(
-                    "Select buildings",
-                    options=[b["building_id"] for b in buildings_meta],
-                    format_func=lambda x: bldg_id_to_name.get(x, x),
-                    key="sp_scope_bldgs",
-                )
-                adj_scope = "buildings"
+            if scope_choice == "Specific Buildings":
+                scope_vals    = st.multiselect("Select buildings", all_bldgs, key="sp_scope_bldgs")
+                adj_scope     = "buildings"
                 adj_scope_values = scope_vals or []
-            elif scope_choice == "👥 Specific LoB":
-                scope_vals = st.multiselect(
-                    "Select Lines of Business",
-                    options=all_lobs,
-                    key="sp_scope_lob",
-                )
-                adj_scope = "lob"
+            elif scope_choice == "Specific LoB":
+                scope_vals    = st.multiselect("Select LOBs", all_lobs, key="sp_scope_lob")
+                adj_scope     = "lob"
                 adj_scope_values = scope_vals or []
             else:
-                adj_scope = "all"
+                adj_scope        = "all"
                 adj_scope_values = []
 
             st.markdown("**Event Period**")
-            st.caption("Select when the event occurs. Only footfall in this window is adjusted.")
-
-            today = date.today()
+            # Use data anchor so presets work on historical/future-dated datasets too
+            today = get_data_anchor(daily_df)
+            data_end = daily_df[C_DATE].max().date()
             period_preset = st.radio(
                 "Planning window",
-                ["Next Week", "Next 2 Weeks", "Next Month", "Next Quarter", "Custom"],
+                ["Next Week", "Next 2 Weeks", "Next Month", "Custom"],
                 horizontal=True,
                 index=0,
                 key="sp_period_preset",
             )
-
             if period_preset == "Next Week":
-                dr_start = today + timedelta(days=1)
-                dr_end   = today + timedelta(days=7)
+                dr_start, dr_end = today + timedelta(1), min(today + timedelta(7), data_end)
             elif period_preset == "Next 2 Weeks":
-                dr_start = today + timedelta(days=1)
-                dr_end   = today + timedelta(days=14)
+                dr_start, dr_end = today + timedelta(1), min(today + timedelta(14), data_end)
             elif period_preset == "Next Month":
-                dr_start = today + timedelta(days=1)
-                dr_end   = today + timedelta(days=30)
-            elif period_preset == "Next Quarter":
-                dr_start = today + timedelta(days=1)
-                dr_end   = today + timedelta(days=90)
-            else:  # Custom
-                custom_range = st.date_input(
-                    "Select date range",
-                    value=(today + timedelta(days=7), today + timedelta(days=21)),
+                dr_start, dr_end = today + timedelta(1), min(today + timedelta(30), data_end)
+            else:
+                cr = st.date_input(
+                    "Date range",
+                    value=(today + timedelta(7), min(today + timedelta(21), data_end)),
                     min_value=today,
-                    max_value=today + timedelta(days=365),
+                    max_value=data_end,
                     key="sp_daterange_a",
                 )
-                if isinstance(custom_range, (list, tuple)) and len(custom_range) == 2:
-                    dr_start, dr_end = custom_range[0], custom_range[1]
+                if isinstance(cr, (list, tuple)) and len(cr) == 2:
+                    dr_start, dr_end = cr[0], cr[1]
                 else:
-                    dr_start = today + timedelta(days=7)
-                    dr_end   = today + timedelta(days=21)
+                    dr_start, dr_end = today + timedelta(7), today + timedelta(21)
 
             if period_preset != "Custom":
                 n_days = (dr_end - dr_start).days + 1
                 st.caption(f"📅 {dr_start.strftime('%b %d')} → {dr_end.strftime('%b %d, %Y')} ({n_days} days)")
 
-            st.markdown("")
             st.markdown("**Built-in Adjustments**")
-            st.caption("Multipliers are configurable via the ⚙️ Admin tab.")
+            st.caption("Multipliers configurable via ⚙️ Admin.")
 
-            # --- Dynamic checkboxes generated from configurable multipliers ---
-            # Group into categories by key name pattern
-            corporate_keys = [k for k in mults_config if k in ("townhall", "leadership_visit")]
-            disruption_keys = [k for k in mults_config if k in ("weather_alert", "traffic_disruption")]
-            calendar_keys = [k for k in mults_config if k in ("mandatory_holiday", "optional_holiday", "us_holiday")]
-            other_keys = [k for k in mults_config
-                          if k not in corporate_keys + disruption_keys + calendar_keys]
+            corporate_keys   = [k for k in mults_config if k in ("townhall", "leadership_visit")]
+            disruption_keys  = [k for k in mults_config if k in ("weather_alert", "traffic_disruption")]
+            calendar_keys    = [k for k in mults_config if k in ("mandatory_holiday", "optional_holiday", "us_holiday")]
+            other_keys       = [k for k in mults_config
+                                if k not in corporate_keys + disruption_keys + calendar_keys]
 
-            def _checkbox_group(label: str, keys: list, prefix: str) -> dict:
+            def _checkbox_group(label, keys, prefix):
                 if not keys:
                     return {}
                 st.markdown(f'<p class="section-header">{label}</p>', unsafe_allow_html=True)
@@ -164,20 +156,19 @@ def render() -> None:
                 return result
 
             adj_checks: dict = {}
-            adj_checks.update(_checkbox_group("Corporate Events", corporate_keys, "corp"))
-            adj_checks.update(_checkbox_group("External Disruptions", disruption_keys, "dis"))
-            adj_checks.update(_checkbox_group("Calendar Anomalies", calendar_keys, "cal"))
-            adj_checks.update(_checkbox_group("Other", other_keys, "oth"))
+            adj_checks.update(_checkbox_group("Corporate Events",      corporate_keys,  "corp"))
+            adj_checks.update(_checkbox_group("External Disruptions",  disruption_keys, "dis"))
+            adj_checks.update(_checkbox_group("Calendar Anomalies",    calendar_keys,   "cal"))
+            adj_checks.update(_checkbox_group("Other",                 other_keys,      "oth"))
 
-            st.markdown("")
             st.markdown("**Custom Factor**")
             custom_pct = st.number_input(
-                "% adjustment (+ = more footfall, − = less)",
+                "% adjustment (+ = more, − = less)",
                 min_value=-100.0, max_value=200.0, value=0.0, step=5.0,
                 key="sp_custom",
             )
 
-        # Compute baseline + scenario
+        # Compute
         baseline_a = filter_df(daily_df, buildings=sel_bldgs_a or None, lobs=sel_lobs_a or None)
         scenario_a = apply_scenario_adjustments(
             baseline_a,
@@ -190,12 +181,11 @@ def render() -> None:
         )
 
         with col_impact:
-            st.markdown("### Event Impact")
+            st.markdown('<p class="section-header">Event Impact</p>', unsafe_allow_html=True)
 
-            sp_kpis = compute_scenario_kpis(baseline_a, scenario_a, (dr_start, dr_end))
+            sp_kpis   = compute_scenario_kpis(baseline_a, scenario_a, (dr_start, dr_end))
             daily_delta = sp_kpis["scenario_avg_daily"] - sp_kpis["baseline_avg_daily"]
-            delta_val = sp_kpis["delta"]
-            wkdays = sp_kpis.get("window_weekdays", sp_kpis["window_days"])
+            wkdays    = sp_kpis.get("window_weekdays", sp_kpis["window_days"])
 
             sk1, sk2, sk3 = st.columns(3)
             sk1.metric("Baseline Avg Daily", f"{sp_kpis['baseline_avg_daily']:,} seats/day")
@@ -205,21 +195,17 @@ def render() -> None:
                 delta=f"{daily_delta:+,} seats/day" if daily_delta != 0 else None,
                 delta_color="normal" if daily_delta >= 0 else "inverse",
             )
-            sk3.metric("Event Window", f"{sp_kpis['window_days']} days")
+            sk3.metric("Event Window", f"{sp_kpis['window_days']} days ({wkdays} weekdays)")
 
-            if delta_val != 0:
-                direction = f"+{delta_val:,}" if delta_val > 0 else f"{delta_val:,}"
+            if sp_kpis["delta"] != 0:
+                d = sp_kpis["delta"]
                 st.caption(
-                    f"Event window: {sp_kpis['window_days']} calendar days ({wkdays} weekdays) · "
-                    f"Total impact: **{direction} person-days** vs baseline"
+                    f"Total impact over window: **{d:+,} person-days** vs baseline"
                 )
             else:
-                st.caption(
-                    f"Event window: {sp_kpis['window_days']} calendar days ({wkdays} weekdays) · "
-                    "No adjustment applied — select an event or set a custom factor to see impact."
-                )
+                st.caption("No adjustment applied — select an event or set a custom factor to see impact.")
 
-            sp_horizon = min(90, (dr_end - date.today()).days + 30)
+            sp_horizon = min(60, (dr_end - today).days + 20)
             st.plotly_chart(
                 plot_scenario_wedge(baseline_a, scenario_a, (dr_start, dr_end), horizon_days=sp_horizon),
                 use_container_width=True, key="sp_wedge",
@@ -229,13 +215,11 @@ def render() -> None:
             impact_df = compute_building_impact_table(baseline_a, scenario_a, (dr_start, dr_end))
 
             def _style_diff(df):
-                def _c(val):
+                def _c(v):
                     try:
-                        v = float(val)
-                        if v > 0:
-                            return "color: #155724; font-weight: bold"
-                        elif v < 0:
-                            return "color: #dc3545; font-weight: bold"
+                        fv = float(v)
+                        if fv > 0: return "color:#155724;font-weight:bold"
+                        if fv < 0: return "color:#dc3545;font-weight:bold"
                     except (ValueError, TypeError):
                         pass
                     return ""
@@ -246,7 +230,6 @@ def render() -> None:
             else:
                 st.info("No buildings match the current filter.")
 
-            # Live Impact Insights
             with st.expander("📊 Live Impact Insights", expanded=True):
                 live_insights = compute_live_insights(
                     baseline_a, scenario_a, (dr_start, dr_end),
@@ -255,8 +238,7 @@ def render() -> None:
                 for ins in live_insights:
                     st.markdown(f'<div class="insight-box">{ins}</div>', unsafe_allow_html=True)
 
-            # --- Download Impact Report ---
-            st.markdown("")
+
             st.markdown('<p class="section-header">Download Report</p>', unsafe_allow_html=True)
             xlsx_bytes = generate_scenario_excel_report(
                 baseline_df=baseline_a,
@@ -273,163 +255,162 @@ def render() -> None:
                 file_name=f"scenario_impact_{dr_start}_{dr_end}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="sp_dl_xlsx_a",
-                use_container_width=False,
             )
 
     # ===========================================================================
-    # MODE B — POLICY SIMULATION
+    # MODE B — RTO & SEAT PLANNING
     # ===========================================================================
     else:
-        col_policy, col_policy_impact = st.columns([3, 7])
+        col_ctrl, col_result = st.columns([3, 7])
 
-        with col_policy:
-            st.markdown("### Policy Controls")
+        with col_ctrl:
+            st.markdown('<p class="section-header">Planning Controls</p>', unsafe_allow_html=True)
 
-            sel_lobs_b = st.multiselect("Filter: Line of Business", all_lobs, key="sp_lob_b")
-            sel_bldgs_b = st.multiselect(
-                "Filter: Building",
-                options=[b["building_id"] for b in buildings_meta],
-                format_func=lambda x: bldg_id_to_name.get(x, x),
-                key="sp_bldg_b",
-            )
+            sel_lobs_b  = st.multiselect("Filter: Line of Business", all_lobs, key="sp_lob_b")
+            sel_bldgs_b = st.multiselect("Filter: Building", all_bldgs, key="sp_bldg_b")
 
-            st.markdown("")
+
             st.markdown("**RTO Mandate**")
-            new_rto = st.slider(
-                "Avg office days / week",
-                min_value=1.0, max_value=5.0,
-                value=float(BASELINE_RTO_DAYS),
-                step=0.5, key="sp_rto_days",
+            rto_days = st.slider(
+                "Days per week in office",
+                min_value=1, max_value=5, value=3, step=1,
+                key="sp_rto_days",
+                help="How many days per week each LOB is expected to be in office. 1 = one day/week, 5 = full week.",
             )
-            delta_rto = new_rto - BASELINE_RTO_DAYS
-            if delta_rto > 0:
-                rto_caption = (
-                    f"Baseline is {BASELINE_RTO_DAYS} days/week. "
-                    f"+{delta_rto:.1f} days → footfall increases ~{delta_rto/BASELINE_RTO_DAYS*100:.0f}%"
-                )
-            elif delta_rto < 0:
-                rto_caption = (
-                    f"Baseline is {BASELINE_RTO_DAYS} days/week. "
-                    f"{delta_rto:.1f} days → footfall decreases ~{abs(delta_rto)/BASELINE_RTO_DAYS*100:.0f}%"
-                )
-            else:
-                rto_caption = f"Baseline is {BASELINE_RTO_DAYS} days/week. No change from baseline."
-            st.caption(rto_caption)
+            rto_fraction = rto_days / 5
+            st.caption(
+                f"**{rto_days} day{'s' if rto_days > 1 else ''}/week** → "
+                f"{rto_fraction*100:.0f}% of total headcount expected in office on any given day."
+            )
 
-            st.markdown("")
+
             st.markdown("**Seat Planning Target**")
             target_util_pct = st.slider(
-                "Target utilization % for seat allocation",
+                "Target seat utilization %",
                 min_value=50, max_value=95, value=80, step=5,
                 key="sp_target_util",
+                help="Planning buffer. Seats needed = Expected demand / Target%. Lower % = more buffer.",
             )
             st.caption(
-                f"Seats needed = peak footfall ÷ {target_util_pct}%. "
-                "Lower % = more buffer seats planned."
+                f"Seats needed = Expected demand ÷ {target_util_pct}%. "
+                f"At {target_util_pct}% target, you build in a {100-target_util_pct}% headroom buffer."
             )
 
-            st.markdown("")
-            st.markdown("**Horizon**")
-            pb_horizon_opt = st.radio(
-                "View horizon",
-                ["30 days", "60 days", "6 months"],
-                horizontal=True, key="sp_pb_horizon",
+
+            st.info(
+                f"**Formula:**  \n"
+                f"Expected demand = Total HC × ({rto_days}/5 days) = Total HC × {rto_fraction*100:.0f}%  \n"
+                f"Seats needed = Expected demand ÷ {target_util_pct}%  \n"
+                f"Seat gap = Allocated seats − Seats needed",
+                icon="📐",
             )
-            pb_horizon_days = {"30 days": 30, "60 days": 60, "6 months": 180}[pb_horizon_opt]
 
-        baseline_b = filter_df(daily_df, buildings=sel_bldgs_b or None, lobs=sel_lobs_b or None)
-        policy_df = simulate_rto_policy(baseline_b, new_rto_days=new_rto)
+        filtered_b = filter_df(daily_df, buildings=sel_bldgs_b or None, lobs=sel_lobs_b or None)
 
-        with col_policy_impact:
-            st.markdown("### Policy Impact")
+        with col_result:
+            st.markdown('<p class="section-header">Seat Planning Results</p>', unsafe_allow_html=True)
 
-            pb_kpis = compute_policy_kpis(
-                baseline_b, policy_df,
-                target_utilization=target_util_pct / 100.0,
-                horizon_days=pb_horizon_days,
-            )
+            kpis_b = compute_policy_kpis(filtered_b, rto_fraction, target_util_pct / 100)
 
             pk1, pk2, pk3, pk4 = st.columns(4)
-            pk1.metric("Current Avg Daily Demand", f"{pb_kpis['base_demand']:,}")
+            pk1.metric("Total Headcount",    f"{kpis_b['total_hc']:,}")
             pk2.metric(
-                "Policy Avg Daily Demand", f"{pb_kpis['policy_demand']:,}",
-                delta=f"{pb_kpis['demand_delta']:+,} seats/day",
-                delta_color="normal" if pb_kpis["demand_delta"] >= 0 else "inverse",
+                "Expected Daily Demand",
+                f"{kpis_b['expected_demand']:,} seats",
+                delta=f"{rto_days} day{'s' if rto_days > 1 else ''}/week RTO",
+                delta_color="off",
             )
-            pk3.metric(
-                "Portfolio Seat Gap", f"{pb_kpis['portfolio_gap']:+,}",
-                delta="Surplus" if pb_kpis["portfolio_gap"] >= 0 else "Deficit",
-                delta_color="off" if pb_kpis["portfolio_gap"] >= 0 else "inverse",
-            )
-            pk4.metric("Total Capacity", f"{pb_kpis['total_capacity']:,}")
-
-            st.markdown("")
-            st.plotly_chart(
-                plot_rto_comparison(baseline_b, policy_df),
-                use_container_width=True, key="sp_rto_chart",
+            pk3.metric("Total Allocated",    f"{kpis_b['total_allocated']:,} seats")
+            pk4.metric(
+                "Portfolio Seat Gap",
+                f"{kpis_b['portfolio_gap']:+,}",
+                delta="Surplus" if kpis_b["portfolio_gap"] >= 0 else "Deficit",
+                delta_color="off" if kpis_b["portfolio_gap"] >= 0 else "inverse",
             )
 
-            st.markdown('<p class="section-header">Seat Gap by Building</p>', unsafe_allow_html=True)
-            gap_df = compute_seat_gap_by_building(
-                policy_df,
-                target_utilization=target_util_pct / 100.0,
-                horizon_days=pb_horizon_days,
-            )
 
-            def _style_gap(df):
-                def _c(val):
-                    try:
-                        v = float(val)
-                        if v > 0:
-                            return "color: #155724; font-weight: bold"
-                        elif v < 0:
-                            return "color: #dc3545; font-weight: bold"
-                    except (ValueError, TypeError):
-                        pass
-                    return ""
-                return df.style.map(_c, subset=["Surplus / Deficit"])
 
-            if not gap_df.empty:
-                st.dataframe(_style_gap(gap_df), use_container_width=True, height=280)
+            plan_df = compute_rto_seat_plan(filtered_b, rto_fraction, target_util_pct / 100)
+            if not plan_df.empty:
+                st.plotly_chart(
+                    plot_rto_seat_plan(plan_df),
+                    use_container_width=True, key="sp_rto_chart",
+                )
+
+                st.markdown('<p class="section-header">Seat Gap by LOB</p>', unsafe_allow_html=True)
+
+                def _style_plan(df):
+                    def _c(v):
+                        try:
+                            return "color:#dc3545;font-weight:bold" if float(v) < 0 else "color:#155724;font-weight:bold"
+                        except (ValueError, TypeError):
+                            return ""
+                    return df.style.map(_c, subset=["Seat Gap"])
+
+                st.dataframe(
+                    _style_plan(plan_df),
+                    use_container_width=True, hide_index=True, height=280,
+                )
+
+                st.caption(
+                    "Seat Gap = Allocated Seats − Seats Needed. "
+                    "Negative = deficit; increase allocation or lower RTO mandate."
+                )
+
+                # Sensitivity callout
+                deficits = plan_df[plan_df["Seat Gap"] < 0]
+                if not deficits.empty:
+                    lob_list = ", ".join(deficits["LOB"].tolist())
+                    st.warning(
+                        f"**{len(deficits)} LOB(s) have a seat deficit at {rto_days} day{'s' if rto_days > 1 else ''}/week RTO / "
+                        f"{target_util_pct}% target:** {lob_list}. "
+                        "Consider increasing allocated seats or reducing the RTO mandate."
+                    )
+                else:
+                    st.success(
+                        f"All LOBs have sufficient allocated seats at {rto_days} day{'s' if rto_days > 1 else ''}/week RTO / "
+                        f"{target_util_pct}% target utilization."
+                    )
+
+                # Download
+    
+                st.markdown('<p class="section-header">Download Report</p>', unsafe_allow_html=True)
+                insights_b = [
+                    f"RTO Mandate: {rto_days} day{'s' if rto_days > 1 else ''}/week ({rto_fraction*100:.0f}% of total HC in office daily)",
+                    f"Target utilization: {target_util_pct}%",
+                    f"Total headcount: {kpis_b['total_hc']:,}",
+                    f"Expected daily demand: {kpis_b['expected_demand']:,} seats",
+                    f"Total allocated seats: {kpis_b['total_allocated']:,}",
+                    f"Portfolio seat gap: {kpis_b['portfolio_gap']:+,}",
+                ]
+                kpis_for_report = {
+                    "baseline_avg_daily": kpis_b["expected_demand"],
+                    "scenario_avg_daily": kpis_b["total_seats_needed"],
+                    "window_days": 0,
+                    "window_weekdays": 0,
+                }
+                xlsx_bytes_b = generate_scenario_excel_report(
+                    baseline_df=filtered_b,
+                    scenario_df=filtered_b,
+                    date_range=(filtered_b[C_DATE].min().date(), filtered_b[C_DATE].max().date()),
+                    scenario_kpis=kpis_for_report,
+                    building_impact_df=plan_df,
+                    live_insights=insights_b,
+                    mode="RTO & Seat Planning",
+                    mode_params={
+                        "RTO Mandate":             f"{rto_days} day{'s' if rto_days > 1 else ''}/week ({rto_fraction*100:.0f}% of HC)",
+                        "Target Utilization %":    f"{target_util_pct}%",
+                        "Expected Daily Demand":   kpis_b["expected_demand"],
+                        "Total Seats Needed":      kpis_b["total_seats_needed"],
+                        "Portfolio Seat Gap":      kpis_b["portfolio_gap"],
+                    },
+                )
+                st.download_button(
+                    label="⬇ Download Seat Plan (.xlsx)",
+                    data=xlsx_bytes_b,
+                    file_name=f"seat_plan_rto{rto_days}d_{date.today()}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="sp_dl_xlsx_b",
+                )
             else:
-                st.info("No buildings match the current filter.")
-
-            # --- Download Impact Report ---
-            st.markdown("")
-            st.markdown('<p class="section-header">Download Report</p>', unsafe_allow_html=True)
-            pb_insights = [
-                f"RTO Policy: {new_rto} days/week (baseline: {BASELINE_RTO_DAYS} days/week)",
-                f"Avg daily demand change: {pb_kpis['demand_delta']:+,} seats/day",
-                f"Portfolio seat gap: {pb_kpis['portfolio_gap']:+,} seats",
-                f"Target utilization: {target_util_pct}%",
-                f"Horizon: {pb_horizon_opt}",
-            ]
-            pb_kpis_for_report = {
-                "baseline_avg_daily": pb_kpis["base_demand"],
-                "scenario_avg_daily": pb_kpis["policy_demand"],
-                "window_days": pb_horizon_days,
-                "window_weekdays": pb_horizon_days * 5 // 7,
-            }
-            xlsx_bytes_b = generate_scenario_excel_report(
-                baseline_df=baseline_b,
-                scenario_df=policy_df,
-                date_range=(date.today(), date.today() + timedelta(days=pb_horizon_days)),
-                scenario_kpis=pb_kpis_for_report,
-                building_impact_df=gap_df,
-                live_insights=pb_insights,
-                mode="Policy Simulation",
-                mode_params={
-                    "RTO Days (new)": new_rto,
-                    "RTO Days (baseline)": BASELINE_RTO_DAYS,
-                    "Target Utilization": f"{target_util_pct}%",
-                    "Horizon": pb_horizon_opt,
-                },
-            )
-            st.download_button(
-                label="⬇ Download Impact Report (.xlsx)",
-                data=xlsx_bytes_b,
-                file_name=f"policy_simulation_{date.today()}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="sp_dl_xlsx_b",
-                use_container_width=False,
-            )
+                st.info("Headcount or allocation data not available. Load data via the Admin tab.")

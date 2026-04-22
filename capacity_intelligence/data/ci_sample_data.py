@@ -1,382 +1,411 @@
-"""Sample data generator for the Capacity Intelligence limited version.
+"""Sample data generator for the Capacity Intelligence app — 4-dataset model.
 
-Produces:
-- TOWERS_META: list of tower dicts (27 towers across 3 cities / 9 buildings)
-- BUILDINGS_META: derived list of building-level dicts (backward-compat)
-- generate_daily_footfall(): ~9,855-row DataFrame (date × tower, 365 days)
+Generates:
+  DS1 — Floor Capacity:    City, Building Name, Floor, Total Capacity
+  DS2 — Seat Allocation:   LOB, LOB Leader Name, City, Building Name, Floor, Allocated Seats
+  DS3 — Total Headcount:   LOB, Leader, Headcount
+  DS4 — 60-Day Prediction: Date, Day, City, Building Name, Floor, LOB, Leader,
+                            Holiday Flag, Optional Holiday Flag, Optional Holiday Name,
+                            US Holiday Flag, Employee Count Predicted
 
-Schema returned by generate_daily_footfall():
-    date, tower_id, tower_name, building_id, building_name,
-    city, lob, floor_count, footfall, capacity, utilization_pct
-
-Required columns for CSV upload:
-    date, building_id, building_name, city, lob, footfall, capacity
-
-Optional columns (present in sample data, absent = graceful degradation):
-    tower_id, tower_name, floor_count
+Join keys:
+  (City, Building Name, Floor)       — links DS1, DS2, DS4
+  LOB                                — links DS2, DS3, DS4
 """
 
 from datetime import date, timedelta
+from typing import Optional
 
 import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
-# Column sets for the two-file upload model
+# Column name constants (single source of truth for joins)
 # ---------------------------------------------------------------------------
+COL_CITY          = "City"
+COL_BUILDING      = "Building Name"
+COL_FLOOR         = "Floor"
+COL_LOB           = "LOB"
+COL_LEADER        = "Leader"
+COL_LOB_LEADER    = "LOB Leader Name"
+COL_TOTAL_CAP     = "Total Capacity"
+COL_ALLOC_SEATS   = "Allocated Seats"
+COL_HEADCOUNT     = "Headcount"
+COL_DATE          = "Date"
+COL_DAY           = "Day"
+COL_HOL           = "Holiday Flag"
+COL_OPT_HOL       = "Optional Holiday Flag"
+COL_OPT_HOL_NAME  = "Optional Holiday Name"
+COL_US_HOL        = "US Holiday Flag"
+COL_PREDICTED     = "Employee Count Predicted"
 
-# Building/Tower Master — static reference data (capacity, hierarchy)
-MASTER_REQUIRED_COLS = {"tower_id", "tower_name", "building_id", "building_name", "city", "lob", "capacity"}
-MASTER_OPTIONAL_COLS = {"floor_count"}
+# Derived columns (added by build_daily_df)
+COL_UTIL_PCT      = "Utilization Pct"
+COL_SEAT_GAP      = "Seat Gap"          # Allocated Seats − Predicted
+COL_HC_GAP        = "HC Gap"            # Allocated Seats − Headcount (static)
 
-# Footfall Data — daily attendance counts (slim, time-series)
-FOOTFALL_REQUIRED_COLS = {"date", "tower_id", "footfall"}
-
-# Legacy single-file cols kept for reference only (no longer used by upload UI)
-REQUIRED_COLS = MASTER_REQUIRED_COLS | FOOTFALL_REQUIRED_COLS
-OPTIONAL_COLS = MASTER_OPTIONAL_COLS
-
-# ---------------------------------------------------------------------------
-# Tower definitions
-# Hierarchy: City → Building (3/city) → Tower (2–3/building) → 10 floors each
-# 27 towers total → 27 × 365 = 9,855 rows
-# ---------------------------------------------------------------------------
-TOWERS_META = [
-    # ── Bangalore ──────────────────────────────────────────────────────────
-    # Building 1: Prestige Tech Park (Engineering, 3 towers, total 600 seats)
-    {
-        "tower_id": "BLR-1-TA", "tower_name": "Tower A",
-        "building_id": "BLR-1", "building_name": "Prestige Tech Park",
-        "city": "Bangalore", "lob": "Engineering",
-        "floor_count": 10, "total_capacity": 200, "base_util": 0.84, "growth_rate": 0.16,
-    },
-    {
-        "tower_id": "BLR-1-TB", "tower_name": "Tower B",
-        "building_id": "BLR-1", "building_name": "Prestige Tech Park",
-        "city": "Bangalore", "lob": "Engineering",
-        "floor_count": 10, "total_capacity": 200, "base_util": 0.80, "growth_rate": 0.14,
-    },
-    {
-        "tower_id": "BLR-1-TC", "tower_name": "Tower C",
-        "building_id": "BLR-1", "building_name": "Prestige Tech Park",
-        "city": "Bangalore", "lob": "Engineering",
-        "floor_count": 10, "total_capacity": 200, "base_util": 0.82, "growth_rate": 0.15,
-    },
-    # Building 2: RMZ Infinity (Product, 2 towers, total 300 seats)
-    {
-        "tower_id": "BLR-2-TA", "tower_name": "Tower A",
-        "building_id": "BLR-2", "building_name": "RMZ Infinity",
-        "city": "Bangalore", "lob": "Product",
-        "floor_count": 10, "total_capacity": 150, "base_util": 0.76, "growth_rate": 0.10,
-    },
-    {
-        "tower_id": "BLR-2-TB", "tower_name": "Tower B",
-        "building_id": "BLR-2", "building_name": "RMZ Infinity",
-        "city": "Bangalore", "lob": "Product",
-        "floor_count": 10, "total_capacity": 150, "base_util": 0.74, "growth_rate": 0.10,
-    },
-    # Building 3: Embassy Tech Village (Operations, 2 towers, total 280 seats)
-    {
-        "tower_id": "BLR-3-TA", "tower_name": "Tower A",
-        "building_id": "BLR-3", "building_name": "Embassy Tech Village",
-        "city": "Bangalore", "lob": "Operations",
-        "floor_count": 10, "total_capacity": 140, "base_util": 0.62, "growth_rate": 0.06,
-    },
-    {
-        "tower_id": "BLR-3-TB", "tower_name": "Tower B",
-        "building_id": "BLR-3", "building_name": "Embassy Tech Village",
-        "city": "Bangalore", "lob": "Operations",
-        "floor_count": 10, "total_capacity": 140, "base_util": 0.60, "growth_rate": 0.05,
-    },
-    # ── Hyderabad ──────────────────────────────────────────────────────────
-    # Building 4: Mindspace Hyderabad (Engineering, 3 towers, total 450 seats)
-    {
-        "tower_id": "HYD-1-TA", "tower_name": "Tower A",
-        "building_id": "HYD-1", "building_name": "Mindspace Hyderabad",
-        "city": "Hyderabad", "lob": "Engineering",
-        "floor_count": 10, "total_capacity": 150, "base_util": 0.72, "growth_rate": 0.08,
-    },
-    {
-        "tower_id": "HYD-1-TB", "tower_name": "Tower B",
-        "building_id": "HYD-1", "building_name": "Mindspace Hyderabad",
-        "city": "Hyderabad", "lob": "Engineering",
-        "floor_count": 10, "total_capacity": 150, "base_util": 0.70, "growth_rate": 0.09,
-    },
-    {
-        "tower_id": "HYD-1-TC", "tower_name": "Tower C",
-        "building_id": "HYD-1", "building_name": "Mindspace Hyderabad",
-        "city": "Hyderabad", "lob": "Engineering",
-        "floor_count": 10, "total_capacity": 150, "base_util": 0.68, "growth_rate": 0.07,
-    },
-    # Building 5: DivyaSree (Sales, 2 towers, total 300 seats)
-    {
-        "tower_id": "HYD-2-TA", "tower_name": "Tower A",
-        "building_id": "HYD-2", "building_name": "DivyaSree",
-        "city": "Hyderabad", "lob": "Sales",
-        "floor_count": 10, "total_capacity": 150, "base_util": 0.71, "growth_rate": 0.05,
-    },
-    {
-        "tower_id": "HYD-2-TB", "tower_name": "Tower B",
-        "building_id": "HYD-2", "building_name": "DivyaSree",
-        "city": "Hyderabad", "lob": "Sales",
-        "floor_count": 10, "total_capacity": 150, "base_util": 0.68, "growth_rate": 0.05,
-    },
-    # Building 6: Raheja Mindspace (Finance, 2 towers, total 240 seats)
-    {
-        "tower_id": "HYD-3-TA", "tower_name": "Tower A",
-        "building_id": "HYD-3", "building_name": "Raheja Mindspace",
-        "city": "Hyderabad", "lob": "Finance",
-        "floor_count": 10, "total_capacity": 120, "base_util": 0.55, "growth_rate": 0.02,
-    },
-    {
-        "tower_id": "HYD-3-TB", "tower_name": "Tower B",
-        "building_id": "HYD-3", "building_name": "Raheja Mindspace",
-        "city": "Hyderabad", "lob": "Finance",
-        "floor_count": 10, "total_capacity": 120, "base_util": 0.57, "growth_rate": 0.02,
-    },
-    # ── Chennai ────────────────────────────────────────────────────────────
-    # Building 7: RMZ Millenia (Engineering, 2 towers, total 340 seats)
-    {
-        "tower_id": "CHN-1-TA", "tower_name": "Tower A",
-        "building_id": "CHN-1", "building_name": "RMZ Millenia",
-        "city": "Chennai", "lob": "Engineering",
-        "floor_count": 10, "total_capacity": 170, "base_util": 0.66, "growth_rate": 0.08,
-    },
-    {
-        "tower_id": "CHN-1-TB", "tower_name": "Tower B",
-        "building_id": "CHN-1", "building_name": "RMZ Millenia",
-        "city": "Chennai", "lob": "Engineering",
-        "floor_count": 10, "total_capacity": 170, "base_util": 0.64, "growth_rate": 0.08,
-    },
-    # Building 8: Chennai One (Sales, 2 towers, total 260 seats)
-    {
-        "tower_id": "CHN-2-TA", "tower_name": "Tower A",
-        "building_id": "CHN-2", "building_name": "Chennai One",
-        "city": "Chennai", "lob": "Sales",
-        "floor_count": 10, "total_capacity": 130, "base_util": 0.58, "growth_rate": 0.04,
-    },
-    {
-        "tower_id": "CHN-2-TB", "tower_name": "Tower B",
-        "building_id": "CHN-2", "building_name": "Chennai One",
-        "city": "Chennai", "lob": "Sales",
-        "floor_count": 10, "total_capacity": 130, "base_util": 0.60, "growth_rate": 0.04,
-    },
-    # Building 9: TIDEL Park (Operations, 3 towers, total 450 seats)
-    {
-        "tower_id": "CHN-3-TA", "tower_name": "Tower A",
-        "building_id": "CHN-3", "building_name": "TIDEL Park",
-        "city": "Chennai", "lob": "Operations",
-        "floor_count": 10, "total_capacity": 150, "base_util": 0.88, "growth_rate": -0.04,
-    },
-    {
-        "tower_id": "CHN-3-TB", "tower_name": "Tower B",
-        "building_id": "CHN-3", "building_name": "TIDEL Park",
-        "city": "Chennai", "lob": "Operations",
-        "floor_count": 10, "total_capacity": 150, "base_util": 0.90, "growth_rate": -0.05,
-    },
-    {
-        "tower_id": "CHN-3-TC", "tower_name": "Tower C",
-        "building_id": "CHN-3", "building_name": "TIDEL Park",
-        "city": "Chennai", "lob": "Operations",
-        "floor_count": 10, "total_capacity": 150, "base_util": 0.86, "growth_rate": -0.03,
-    },
-    # ── Manila ─────────────────────────────────────────────────────────────
-    # Building 10: BGC One (Technology, 3 towers, total 450 seats)
-    {
-        "tower_id": "MNL-1-TA", "tower_name": "Tower A",
-        "building_id": "MNL-1", "building_name": "BGC One",
-        "city": "Manila", "lob": "Technology",
-        "floor_count": 10, "total_capacity": 150, "base_util": 0.78, "growth_rate": 0.07,
-    },
-    {
-        "tower_id": "MNL-1-TB", "tower_name": "Tower B",
-        "building_id": "MNL-1", "building_name": "BGC One",
-        "city": "Manila", "lob": "Technology",
-        "floor_count": 10, "total_capacity": 150, "base_util": 0.80, "growth_rate": 0.06,
-    },
-    {
-        "tower_id": "MNL-1-TC", "tower_name": "Tower C",
-        "building_id": "MNL-1", "building_name": "BGC One",
-        "city": "Manila", "lob": "Technology",
-        "floor_count": 10, "total_capacity": 150, "base_util": 0.76, "growth_rate": 0.08,
-    },
-    # Building 11: Rockwell Business Center (Finance, 2 towers, total 280 seats)
-    {
-        "tower_id": "MNL-2-TA", "tower_name": "Tower A",
-        "building_id": "MNL-2", "building_name": "Rockwell Business Center",
-        "city": "Manila", "lob": "Finance",
-        "floor_count": 10, "total_capacity": 140, "base_util": 0.65, "growth_rate": 0.03,
-    },
-    {
-        "tower_id": "MNL-2-TB", "tower_name": "Tower B",
-        "building_id": "MNL-2", "building_name": "Rockwell Business Center",
-        "city": "Manila", "lob": "Finance",
-        "floor_count": 10, "total_capacity": 140, "base_util": 0.62, "growth_rate": 0.03,
-    },
-    # Building 12: Eastwood City Hub (Operations, 2 towers, total 320 seats)
-    {
-        "tower_id": "MNL-3-TA", "tower_name": "Tower A",
-        "building_id": "MNL-3", "building_name": "Eastwood City Hub",
-        "city": "Manila", "lob": "Operations",
-        "floor_count": 10, "total_capacity": 160, "base_util": 0.85, "growth_rate": -0.04,
-    },
-    {
-        "tower_id": "MNL-3-TB", "tower_name": "Tower B",
-        "building_id": "MNL-3", "building_name": "Eastwood City Hub",
-        "city": "Manila", "lob": "Operations",
-        "floor_count": 10, "total_capacity": 160, "base_util": 0.83, "growth_rate": -0.04,
-    },
+FLOOR_CAPACITY_COLS  = [COL_CITY, COL_BUILDING, COL_FLOOR, COL_TOTAL_CAP]
+SEAT_ALLOC_COLS      = [COL_LOB, COL_LOB_LEADER, COL_CITY, COL_BUILDING, COL_FLOOR, COL_ALLOC_SEATS]
+HEADCOUNT_COLS       = [COL_LOB, COL_LEADER, COL_HEADCOUNT]
+PREDICTION_COLS      = [
+    COL_DATE, COL_DAY, COL_CITY, COL_BUILDING, COL_FLOOR,
+    COL_LOB, COL_LEADER,
+    COL_HOL, COL_OPT_HOL, COL_OPT_HOL_NAME, COL_US_HOL,
+    COL_PREDICTED,
 ]
 
 # ---------------------------------------------------------------------------
-# Derived BUILDINGS_META — backward-compatible building-level summary
-# (deduped from TOWERS_META; capacity = sum of tower capacities per building)
+# DS1 — Floor Capacity
 # ---------------------------------------------------------------------------
-def _build_buildings_meta() -> list:
-    seen = {}
-    for t in TOWERS_META:
-        bid = t["building_id"]
-        if bid not in seen:
-            seen[bid] = {
-                "building_id": bid,
-                "building_name": t["building_name"],
-                "city": t["city"],
-                "lob": t["lob"],
-                "total_capacity": 0,
-            }
-        seen[bid]["total_capacity"] += t["total_capacity"]
-    return list(seen.values())
+_FLOOR_CAPACITY_ROWS = [
+    # Bangalore — Prestige Tech Park
+    {COL_CITY: "Bangalore", COL_BUILDING: "Prestige Tech Park",       COL_FLOOR: 3,  COL_TOTAL_CAP: 120},
+    {COL_CITY: "Bangalore", COL_BUILDING: "Prestige Tech Park",       COL_FLOOR: 4,  COL_TOTAL_CAP: 120},
+    {COL_CITY: "Bangalore", COL_BUILDING: "Prestige Tech Park",       COL_FLOOR: 5,  COL_TOTAL_CAP: 100},
+    # Bangalore — RMZ Infinity
+    {COL_CITY: "Bangalore", COL_BUILDING: "RMZ Infinity",             COL_FLOOR: 2,  COL_TOTAL_CAP: 100},
+    {COL_CITY: "Bangalore", COL_BUILDING: "RMZ Infinity",             COL_FLOOR: 3,  COL_TOTAL_CAP: 100},
+    # Bangalore — Embassy Tech Village
+    {COL_CITY: "Bangalore", COL_BUILDING: "Embassy Tech Village",     COL_FLOOR: 1,  COL_TOTAL_CAP:  90},
+    {COL_CITY: "Bangalore", COL_BUILDING: "Embassy Tech Village",     COL_FLOOR: 2,  COL_TOTAL_CAP:  90},
+    # Hyderabad — Mindspace Hyderabad
+    {COL_CITY: "Hyderabad", COL_BUILDING: "Mindspace Hyderabad",      COL_FLOOR: 4,  COL_TOTAL_CAP: 130},
+    {COL_CITY: "Hyderabad", COL_BUILDING: "Mindspace Hyderabad",      COL_FLOOR: 5,  COL_TOTAL_CAP: 130},
+    {COL_CITY: "Hyderabad", COL_BUILDING: "Mindspace Hyderabad",      COL_FLOOR: 6,  COL_TOTAL_CAP: 110},
+    # Hyderabad — DivyaSree
+    {COL_CITY: "Hyderabad", COL_BUILDING: "DivyaSree",                COL_FLOOR: 2,  COL_TOTAL_CAP: 100},
+    {COL_CITY: "Hyderabad", COL_BUILDING: "DivyaSree",                COL_FLOOR: 3,  COL_TOTAL_CAP: 100},
+    # Hyderabad — Raheja Mindspace
+    {COL_CITY: "Hyderabad", COL_BUILDING: "Raheja Mindspace",         COL_FLOOR: 1,  COL_TOTAL_CAP:  80},
+    {COL_CITY: "Hyderabad", COL_BUILDING: "Raheja Mindspace",         COL_FLOOR: 2,  COL_TOTAL_CAP:  80},
+    # Chennai — RMZ Millenia
+    {COL_CITY: "Chennai",   COL_BUILDING: "RMZ Millenia",             COL_FLOOR: 3,  COL_TOTAL_CAP: 110},
+    {COL_CITY: "Chennai",   COL_BUILDING: "RMZ Millenia",             COL_FLOOR: 4,  COL_TOTAL_CAP: 110},
+    # Chennai — Chennai One
+    {COL_CITY: "Chennai",   COL_BUILDING: "Chennai One",              COL_FLOOR: 2,  COL_TOTAL_CAP:  90},
+    {COL_CITY: "Chennai",   COL_BUILDING: "Chennai One",              COL_FLOOR: 3,  COL_TOTAL_CAP:  90},
+    # Chennai — TIDEL Park
+    {COL_CITY: "Chennai",   COL_BUILDING: "TIDEL Park",               COL_FLOOR: 5,  COL_TOTAL_CAP: 120},
+    {COL_CITY: "Chennai",   COL_BUILDING: "TIDEL Park",               COL_FLOOR: 6,  COL_TOTAL_CAP: 120},
+    {COL_CITY: "Chennai",   COL_BUILDING: "TIDEL Park",               COL_FLOOR: 7,  COL_TOTAL_CAP: 100},
+    # Manila — BGC One
+    {COL_CITY: "Manila",    COL_BUILDING: "BGC One",                  COL_FLOOR: 8,  COL_TOTAL_CAP: 130},
+    {COL_CITY: "Manila",    COL_BUILDING: "BGC One",                  COL_FLOOR: 9,  COL_TOTAL_CAP: 130},
+    {COL_CITY: "Manila",    COL_BUILDING: "BGC One",                  COL_FLOOR: 10, COL_TOTAL_CAP: 110},
+    # Manila — Rockwell Business Center
+    {COL_CITY: "Manila",    COL_BUILDING: "Rockwell Business Center", COL_FLOOR: 3,  COL_TOTAL_CAP: 100},
+    {COL_CITY: "Manila",    COL_BUILDING: "Rockwell Business Center", COL_FLOOR: 4,  COL_TOTAL_CAP: 100},
+    # Manila — Eastwood City Hub
+    {COL_CITY: "Manila",    COL_BUILDING: "Eastwood City Hub",        COL_FLOOR: 2,  COL_TOTAL_CAP: 110},
+    {COL_CITY: "Manila",    COL_BUILDING: "Eastwood City Hub",        COL_FLOOR: 3,  COL_TOTAL_CAP: 110},
+]
 
+# ---------------------------------------------------------------------------
+# DS2 — Seat Allocation (multiple LOBs per floor)
+# Rule: sum(Allocated Seats per floor) ≤ Total Capacity
+# ---------------------------------------------------------------------------
+_SEAT_ALLOCATION_ROWS = [
+    # ── Prestige Tech Park ────────────────────────────────────────────────
+    # Floor 3 (cap 120): Engineering 70 + Product 40 = 110
+    {COL_LOB: "Engineering", COL_LOB_LEADER: "Priya Sharma",  COL_CITY: "Bangalore", COL_BUILDING: "Prestige Tech Park", COL_FLOOR: 3, COL_ALLOC_SEATS: 70},
+    {COL_LOB: "Product",     COL_LOB_LEADER: "Kiran Mehta",   COL_CITY: "Bangalore", COL_BUILDING: "Prestige Tech Park", COL_FLOOR: 3, COL_ALLOC_SEATS: 40},
+    # Floor 4 (cap 120): Engineering 60 + Operations 50 = 110
+    {COL_LOB: "Engineering", COL_LOB_LEADER: "Priya Sharma",  COL_CITY: "Bangalore", COL_BUILDING: "Prestige Tech Park", COL_FLOOR: 4, COL_ALLOC_SEATS: 60},
+    {COL_LOB: "Operations",  COL_LOB_LEADER: "Suresh Rao",    COL_CITY: "Bangalore", COL_BUILDING: "Prestige Tech Park", COL_FLOOR: 4, COL_ALLOC_SEATS: 50},
+    # Floor 5 (cap 100): Product 50 + HR 40 = 90
+    {COL_LOB: "Product",     COL_LOB_LEADER: "Kiran Mehta",   COL_CITY: "Bangalore", COL_BUILDING: "Prestige Tech Park", COL_FLOOR: 5, COL_ALLOC_SEATS: 50},
+    {COL_LOB: "HR",          COL_LOB_LEADER: "Deepa Nair",    COL_CITY: "Bangalore", COL_BUILDING: "Prestige Tech Park", COL_FLOOR: 5, COL_ALLOC_SEATS: 40},
+    # ── RMZ Infinity ─────────────────────────────────────────────────────
+    # Floor 2 (cap 100): Product 55 + Sales 35 = 90
+    {COL_LOB: "Product",     COL_LOB_LEADER: "Kiran Mehta",   COL_CITY: "Bangalore", COL_BUILDING: "RMZ Infinity", COL_FLOOR: 2, COL_ALLOC_SEATS: 55},
+    {COL_LOB: "Sales",       COL_LOB_LEADER: "Anjali Patel",  COL_CITY: "Bangalore", COL_BUILDING: "RMZ Infinity", COL_FLOOR: 2, COL_ALLOC_SEATS: 35},
+    # Floor 3 (cap 100): Product 45 + Engineering 40 = 85
+    {COL_LOB: "Product",     COL_LOB_LEADER: "Kiran Mehta",   COL_CITY: "Bangalore", COL_BUILDING: "RMZ Infinity", COL_FLOOR: 3, COL_ALLOC_SEATS: 45},
+    {COL_LOB: "Engineering", COL_LOB_LEADER: "Priya Sharma",  COL_CITY: "Bangalore", COL_BUILDING: "RMZ Infinity", COL_FLOOR: 3, COL_ALLOC_SEATS: 40},
+    # ── Embassy Tech Village ──────────────────────────────────────────────
+    # Floor 1 (cap 90): Operations 50 + Finance 30 = 80
+    {COL_LOB: "Operations",  COL_LOB_LEADER: "Suresh Rao",    COL_CITY: "Bangalore", COL_BUILDING: "Embassy Tech Village", COL_FLOOR: 1, COL_ALLOC_SEATS: 50},
+    {COL_LOB: "Finance",     COL_LOB_LEADER: "Vikram Singh",  COL_CITY: "Bangalore", COL_BUILDING: "Embassy Tech Village", COL_FLOOR: 1, COL_ALLOC_SEATS: 30},
+    # Floor 2 (cap 90): Operations 55 + HR 25 = 80
+    {COL_LOB: "Operations",  COL_LOB_LEADER: "Suresh Rao",    COL_CITY: "Bangalore", COL_BUILDING: "Embassy Tech Village", COL_FLOOR: 2, COL_ALLOC_SEATS: 55},
+    {COL_LOB: "HR",          COL_LOB_LEADER: "Deepa Nair",    COL_CITY: "Bangalore", COL_BUILDING: "Embassy Tech Village", COL_FLOOR: 2, COL_ALLOC_SEATS: 25},
+    # ── Mindspace Hyderabad ───────────────────────────────────────────────
+    # Floor 4 (cap 130): Engineering 75 + Technology 45 = 120
+    {COL_LOB: "Engineering", COL_LOB_LEADER: "Priya Sharma",  COL_CITY: "Hyderabad", COL_BUILDING: "Mindspace Hyderabad", COL_FLOOR: 4, COL_ALLOC_SEATS: 75},
+    {COL_LOB: "Technology",  COL_LOB_LEADER: "Maria Santos",  COL_CITY: "Hyderabad", COL_BUILDING: "Mindspace Hyderabad", COL_FLOOR: 4, COL_ALLOC_SEATS: 45},
+    # Floor 5 (cap 130): Engineering 65 + Product 50 = 115
+    {COL_LOB: "Engineering", COL_LOB_LEADER: "Priya Sharma",  COL_CITY: "Hyderabad", COL_BUILDING: "Mindspace Hyderabad", COL_FLOOR: 5, COL_ALLOC_SEATS: 65},
+    {COL_LOB: "Product",     COL_LOB_LEADER: "Kiran Mehta",   COL_CITY: "Hyderabad", COL_BUILDING: "Mindspace Hyderabad", COL_FLOOR: 5, COL_ALLOC_SEATS: 50},
+    # Floor 6 (cap 110): Sales 55 + Finance 40 = 95
+    {COL_LOB: "Sales",       COL_LOB_LEADER: "Anjali Patel",  COL_CITY: "Hyderabad", COL_BUILDING: "Mindspace Hyderabad", COL_FLOOR: 6, COL_ALLOC_SEATS: 55},
+    {COL_LOB: "Finance",     COL_LOB_LEADER: "Vikram Singh",  COL_CITY: "Hyderabad", COL_BUILDING: "Mindspace Hyderabad", COL_FLOOR: 6, COL_ALLOC_SEATS: 40},
+    # ── DivyaSree ─────────────────────────────────────────────────────────
+    # Floor 2 (cap 100): Sales 55 + Operations 35 = 90
+    {COL_LOB: "Sales",       COL_LOB_LEADER: "Anjali Patel",  COL_CITY: "Hyderabad", COL_BUILDING: "DivyaSree", COL_FLOOR: 2, COL_ALLOC_SEATS: 55},
+    {COL_LOB: "Operations",  COL_LOB_LEADER: "Suresh Rao",    COL_CITY: "Hyderabad", COL_BUILDING: "DivyaSree", COL_FLOOR: 2, COL_ALLOC_SEATS: 35},
+    # Floor 3 (cap 100): Sales 45 + Technology 40 = 85
+    {COL_LOB: "Sales",       COL_LOB_LEADER: "Anjali Patel",  COL_CITY: "Hyderabad", COL_BUILDING: "DivyaSree", COL_FLOOR: 3, COL_ALLOC_SEATS: 45},
+    {COL_LOB: "Technology",  COL_LOB_LEADER: "Maria Santos",  COL_CITY: "Hyderabad", COL_BUILDING: "DivyaSree", COL_FLOOR: 3, COL_ALLOC_SEATS: 40},
+    # ── Raheja Mindspace ──────────────────────────────────────────────────
+    # Floor 1 (cap 80): Finance 45 + HR 25 = 70
+    {COL_LOB: "Finance",     COL_LOB_LEADER: "Vikram Singh",  COL_CITY: "Hyderabad", COL_BUILDING: "Raheja Mindspace", COL_FLOOR: 1, COL_ALLOC_SEATS: 45},
+    {COL_LOB: "HR",          COL_LOB_LEADER: "Deepa Nair",    COL_CITY: "Hyderabad", COL_BUILDING: "Raheja Mindspace", COL_FLOOR: 1, COL_ALLOC_SEATS: 25},
+    # Floor 2 (cap 80): Finance 40 + Operations 30 = 70
+    {COL_LOB: "Finance",     COL_LOB_LEADER: "Vikram Singh",  COL_CITY: "Hyderabad", COL_BUILDING: "Raheja Mindspace", COL_FLOOR: 2, COL_ALLOC_SEATS: 40},
+    {COL_LOB: "Operations",  COL_LOB_LEADER: "Suresh Rao",    COL_CITY: "Hyderabad", COL_BUILDING: "Raheja Mindspace", COL_FLOOR: 2, COL_ALLOC_SEATS: 30},
+    # ── RMZ Millenia ─────────────────────────────────────────────────────
+    # Floor 3 (cap 110): Engineering 60 + Technology 40 = 100
+    {COL_LOB: "Engineering", COL_LOB_LEADER: "Priya Sharma",  COL_CITY: "Chennai", COL_BUILDING: "RMZ Millenia", COL_FLOOR: 3, COL_ALLOC_SEATS: 60},
+    {COL_LOB: "Technology",  COL_LOB_LEADER: "Maria Santos",  COL_CITY: "Chennai", COL_BUILDING: "RMZ Millenia", COL_FLOOR: 3, COL_ALLOC_SEATS: 40},
+    # Floor 4 (cap 110): Engineering 55 + Product 45 = 100
+    {COL_LOB: "Engineering", COL_LOB_LEADER: "Priya Sharma",  COL_CITY: "Chennai", COL_BUILDING: "RMZ Millenia", COL_FLOOR: 4, COL_ALLOC_SEATS: 55},
+    {COL_LOB: "Product",     COL_LOB_LEADER: "Kiran Mehta",   COL_CITY: "Chennai", COL_BUILDING: "RMZ Millenia", COL_FLOOR: 4, COL_ALLOC_SEATS: 45},
+    # ── Chennai One ──────────────────────────────────────────────────────
+    # Floor 2 (cap 90): Sales 50 + Operations 30 = 80
+    {COL_LOB: "Sales",       COL_LOB_LEADER: "Anjali Patel",  COL_CITY: "Chennai", COL_BUILDING: "Chennai One", COL_FLOOR: 2, COL_ALLOC_SEATS: 50},
+    {COL_LOB: "Operations",  COL_LOB_LEADER: "Suresh Rao",    COL_CITY: "Chennai", COL_BUILDING: "Chennai One", COL_FLOOR: 2, COL_ALLOC_SEATS: 30},
+    # Floor 3 (cap 90): Sales 40 + HR 35 = 75
+    {COL_LOB: "Sales",       COL_LOB_LEADER: "Anjali Patel",  COL_CITY: "Chennai", COL_BUILDING: "Chennai One", COL_FLOOR: 3, COL_ALLOC_SEATS: 40},
+    {COL_LOB: "HR",          COL_LOB_LEADER: "Deepa Nair",    COL_CITY: "Chennai", COL_BUILDING: "Chennai One", COL_FLOOR: 3, COL_ALLOC_SEATS: 35},
+    # ── TIDEL Park ───────────────────────────────────────────────────────
+    # Floor 5 (cap 120): Operations 70 + Finance 40 = 110
+    {COL_LOB: "Operations",  COL_LOB_LEADER: "Suresh Rao",    COL_CITY: "Chennai", COL_BUILDING: "TIDEL Park", COL_FLOOR: 5, COL_ALLOC_SEATS: 70},
+    {COL_LOB: "Finance",     COL_LOB_LEADER: "Vikram Singh",  COL_CITY: "Chennai", COL_BUILDING: "TIDEL Park", COL_FLOOR: 5, COL_ALLOC_SEATS: 40},
+    # Floor 6 (cap 120): Operations 65 + Engineering 45 = 110
+    {COL_LOB: "Operations",  COL_LOB_LEADER: "Suresh Rao",    COL_CITY: "Chennai", COL_BUILDING: "TIDEL Park", COL_FLOOR: 6, COL_ALLOC_SEATS: 65},
+    {COL_LOB: "Engineering", COL_LOB_LEADER: "Priya Sharma",  COL_CITY: "Chennai", COL_BUILDING: "TIDEL Park", COL_FLOOR: 6, COL_ALLOC_SEATS: 45},
+    # Floor 7 (cap 100): Operations 55 + Technology 35 = 90
+    {COL_LOB: "Operations",  COL_LOB_LEADER: "Suresh Rao",    COL_CITY: "Chennai", COL_BUILDING: "TIDEL Park", COL_FLOOR: 7, COL_ALLOC_SEATS: 55},
+    {COL_LOB: "Technology",  COL_LOB_LEADER: "Maria Santos",  COL_CITY: "Chennai", COL_BUILDING: "TIDEL Park", COL_FLOOR: 7, COL_ALLOC_SEATS: 35},
+    # ── BGC One ──────────────────────────────────────────────────────────
+    # Floor 8 (cap 130): Technology 75 + Engineering 45 = 120
+    {COL_LOB: "Technology",  COL_LOB_LEADER: "Maria Santos",  COL_CITY: "Manila", COL_BUILDING: "BGC One", COL_FLOOR: 8,  COL_ALLOC_SEATS: 75},
+    {COL_LOB: "Engineering", COL_LOB_LEADER: "Priya Sharma",  COL_CITY: "Manila", COL_BUILDING: "BGC One", COL_FLOOR: 8,  COL_ALLOC_SEATS: 45},
+    # Floor 9 (cap 130): Technology 65 + Product 50 = 115
+    {COL_LOB: "Technology",  COL_LOB_LEADER: "Maria Santos",  COL_CITY: "Manila", COL_BUILDING: "BGC One", COL_FLOOR: 9,  COL_ALLOC_SEATS: 65},
+    {COL_LOB: "Product",     COL_LOB_LEADER: "Kiran Mehta",   COL_CITY: "Manila", COL_BUILDING: "BGC One", COL_FLOOR: 9,  COL_ALLOC_SEATS: 50},
+    # Floor 10 (cap 110): Technology 55 + Finance 40 = 95
+    {COL_LOB: "Technology",  COL_LOB_LEADER: "Maria Santos",  COL_CITY: "Manila", COL_BUILDING: "BGC One", COL_FLOOR: 10, COL_ALLOC_SEATS: 55},
+    {COL_LOB: "Finance",     COL_LOB_LEADER: "Vikram Singh",  COL_CITY: "Manila", COL_BUILDING: "BGC One", COL_FLOOR: 10, COL_ALLOC_SEATS: 40},
+    # ── Rockwell Business Center ─────────────────────────────────────────
+    # Floor 3 (cap 100): Finance 55 + HR 35 = 90
+    {COL_LOB: "Finance",     COL_LOB_LEADER: "Vikram Singh",  COL_CITY: "Manila", COL_BUILDING: "Rockwell Business Center", COL_FLOOR: 3, COL_ALLOC_SEATS: 55},
+    {COL_LOB: "HR",          COL_LOB_LEADER: "Deepa Nair",    COL_CITY: "Manila", COL_BUILDING: "Rockwell Business Center", COL_FLOOR: 3, COL_ALLOC_SEATS: 35},
+    # Floor 4 (cap 100): Finance 50 + Operations 40 = 90
+    {COL_LOB: "Finance",     COL_LOB_LEADER: "Vikram Singh",  COL_CITY: "Manila", COL_BUILDING: "Rockwell Business Center", COL_FLOOR: 4, COL_ALLOC_SEATS: 50},
+    {COL_LOB: "Operations",  COL_LOB_LEADER: "Suresh Rao",    COL_CITY: "Manila", COL_BUILDING: "Rockwell Business Center", COL_FLOOR: 4, COL_ALLOC_SEATS: 40},
+    # ── Eastwood City Hub ────────────────────────────────────────────────
+    # Floor 2 (cap 110): Operations 65 + Technology 35 = 100
+    {COL_LOB: "Operations",  COL_LOB_LEADER: "Suresh Rao",    COL_CITY: "Manila", COL_BUILDING: "Eastwood City Hub", COL_FLOOR: 2, COL_ALLOC_SEATS: 65},
+    {COL_LOB: "Technology",  COL_LOB_LEADER: "Maria Santos",  COL_CITY: "Manila", COL_BUILDING: "Eastwood City Hub", COL_FLOOR: 2, COL_ALLOC_SEATS: 35},
+    # Floor 3 (cap 110): Operations 60 + Sales 40 = 100
+    {COL_LOB: "Operations",  COL_LOB_LEADER: "Suresh Rao",    COL_CITY: "Manila", COL_BUILDING: "Eastwood City Hub", COL_FLOOR: 3, COL_ALLOC_SEATS: 60},
+    {COL_LOB: "Sales",       COL_LOB_LEADER: "Anjali Patel",  COL_CITY: "Manila", COL_BUILDING: "Eastwood City Hub", COL_FLOOR: 3, COL_ALLOC_SEATS: 40},
+]
 
-BUILDINGS_META = _build_buildings_meta()
+# ---------------------------------------------------------------------------
+# DS3 — Total Headcount (LOB-level snapshot)
+# ---------------------------------------------------------------------------
+_HEADCOUNT_ROWS = [
+    {COL_LOB: "Engineering", COL_LEADER: "Priya Sharma", COL_HEADCOUNT: 350},
+    {COL_LOB: "Product",     COL_LEADER: "Kiran Mehta",  COL_HEADCOUNT: 200},
+    {COL_LOB: "Operations",  COL_LEADER: "Suresh Rao",   COL_HEADCOUNT: 300},
+    {COL_LOB: "Sales",       COL_LEADER: "Anjali Patel", COL_HEADCOUNT: 180},
+    {COL_LOB: "Finance",     COL_LEADER: "Vikram Singh", COL_HEADCOUNT: 150},
+    {COL_LOB: "Technology",  COL_LEADER: "Maria Santos", COL_HEADCOUNT: 250},
+    {COL_LOB: "HR",          COL_LEADER: "Deepa Nair",   COL_HEADCOUNT:  80},
+]
 
+# ---------------------------------------------------------------------------
+# DS4 — 60-Day Prediction: generation parameters
+# ---------------------------------------------------------------------------
 
-# Day-of-week footfall multipliers (0=Monday … 6=Sunday)
-DOW_MULTIPLIERS = {
-    0: 0.85,  # Monday
-    1: 1.00,  # Tuesday
-    2: 1.00,  # Wednesday
-    3: 0.95,  # Thursday
-    4: 0.75,  # Friday
-    5: 0.05,  # Saturday
-    6: 0.02,  # Sunday
+# Base utilization rate per LOB (fraction of allocated seats expected in office on a typical Wed)
+_LOB_BASE_UTIL = {
+    "Engineering": 0.82,
+    "Product":     0.74,
+    "Operations":  0.78,
+    "Sales":       0.70,
+    "Finance":     0.58,
+    "Technology":  0.80,
+    "HR":          0.62,
 }
 
+# Day-of-week attendance multipliers (0=Mon … 6=Sun)
+_DOW_MULT = {0: 0.82, 1: 0.95, 2: 1.00, 3: 0.90, 4: 0.70, 5: 0.05, 6: 0.02}
+_DOW_NAME  = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday",
+              4: "Friday", 5: "Saturday", 6: "Sunday"}
 
-def generate_daily_footfall(seed: int = 42, horizon_days: int = 365) -> pd.DataFrame:
-    """Generate a synthetic daily footfall DataFrame for all towers.
+# Holiday calendar for the sample 60-day window (relative to generation start = today)
+# Format: {offset_days: (holiday_flag, opt_flag, opt_name, us_flag)}
+def _build_holiday_map(start: date) -> dict:
+    hmap = {}
+    for offset in range(60):
+        d = start + timedelta(days=offset)
+        hol, opt, opt_name, us = 0, 0, "", 0
+        if d.month == 5 and d.day == 1:    # International Labour Day
+            hol = 1
+        if d.month == 5 and d.day == 26:   # Memorial Day (US) — last Mon of May 2026
+            us = 1
+        if d.month == 6 and d.day == 5:    # World Environment Day (optional)
+            opt, opt_name = 1, "World Environment Day"
+        if d.month == 6 and d.day == 19:   # Juneteenth (US)
+            us = 1
+        hmap[offset] = (hol, opt, opt_name, us)
+    return hmap
 
-    Returns columns:
-        date, tower_id, tower_name, building_id, building_name,
-        city, lob, floor_count, footfall, capacity, utilization_pct
 
-    Row count: len(TOWERS_META) × horizon_days  (~9,855 rows at defaults)
+# ---------------------------------------------------------------------------
+# Public accessor functions — return clean DataFrames
+# ---------------------------------------------------------------------------
+
+def get_floor_capacity_df() -> pd.DataFrame:
+    """DS1 — Floor Capacity snapshot."""
+    return pd.DataFrame(_FLOOR_CAPACITY_ROWS)[FLOOR_CAPACITY_COLS]
+
+
+def get_seat_allocation_df() -> pd.DataFrame:
+    """DS2 — Seat Allocation snapshot (multiple LOBs per floor)."""
+    return pd.DataFrame(_SEAT_ALLOCATION_ROWS)[SEAT_ALLOC_COLS]
+
+
+def get_headcount_df() -> pd.DataFrame:
+    """DS3 — Total Headcount by LOB."""
+    return pd.DataFrame(_HEADCOUNT_ROWS)[HEADCOUNT_COLS]
+
+
+def get_prediction_df(seed: int = 42, horizon_days: int = 60) -> pd.DataFrame:
+    """DS4 — 60-day predicted attendance at (Date × Building × Floor × LOB) granularity.
+
+    Uses seat allocation rows as the universe of (building, floor, lob) combinations.
+    Prediction = allocated_seats × lob_base_util × dow_multiplier × noise.
+    Row count: len(allocation_rows) × horizon_days  (~3,480 rows at defaults)
     """
     rng = np.random.default_rng(seed)
     start = date.today()
+    holiday_map = _build_holiday_map(start)
     rows = []
 
-    for tower in TOWERS_META:
-        cap = tower["total_capacity"]
-        base_demand = tower["base_util"] * cap
-        annual_growth = tower["growth_rate"]
+    for alloc in _SEAT_ALLOCATION_ROWS:
+        city    = alloc[COL_CITY]
+        building = alloc[COL_BUILDING]
+        floor   = alloc[COL_FLOOR]
+        lob     = alloc[COL_LOB]
+        leader  = alloc[COL_LOB_LEADER]
+        alloc_seats = alloc[COL_ALLOC_SEATS]
+        base_util   = _LOB_BASE_UTIL.get(lob, 0.70)
+        base_demand = alloc_seats * base_util
 
         for i in range(horizon_days):
             d = start + timedelta(days=i)
-            dow_mult = DOW_MULTIPLIERS[d.weekday()]
-            trend_factor = 1.0 + annual_growth * (i / 365.0)
-            expected = base_demand * dow_mult * trend_factor
-            noise_factor = 1.0 + rng.normal(0, 0.08)
-            footfall = int(max(0, round(expected * noise_factor)))
+            hol, opt, opt_name, us = holiday_map.get(i, (0, 0, "", 0))
 
-            rows.append(
-                {
-                    "date": pd.Timestamp(d),
-                    "tower_id": tower["tower_id"],
-                    "tower_name": tower["tower_name"],
-                    "building_id": tower["building_id"],
-                    "building_name": tower["building_name"],
-                    "city": tower["city"],
-                    "lob": tower["lob"],
-                    "floor_count": tower["floor_count"],
-                    "footfall": footfall,
-                    "capacity": cap,
-                }
-            )
+            dow_mult = _DOW_MULT[d.weekday()]
+            holiday_reduction = 1.0
+            if hol:
+                holiday_reduction *= 0.10
+            elif opt:
+                holiday_reduction *= 0.60
+            elif us:
+                holiday_reduction *= 0.75
 
-    df = pd.DataFrame(rows)
-    df["utilization_pct"] = (df["footfall"] / df["capacity"]).clip(upper=1.30)
+            expected = base_demand * dow_mult * holiday_reduction
+            noise    = 1.0 + rng.normal(0, 0.07)
+            predicted = int(max(0, round(expected * noise)))
+
+            rows.append({
+                COL_DATE:         pd.Timestamp(d),
+                COL_DAY:          _DOW_NAME[d.weekday()],
+                COL_CITY:         city,
+                COL_BUILDING:     building,
+                COL_FLOOR:        floor,
+                COL_LOB:          lob,
+                COL_LEADER:       leader,
+                COL_HOL:          hol,
+                COL_OPT_HOL:      opt,
+                COL_OPT_HOL_NAME: opt_name,
+                COL_US_HOL:       us,
+                COL_PREDICTED:    predicted,
+            })
+
+    return pd.DataFrame(rows)[PREDICTION_COLS]
+
+
+# ---------------------------------------------------------------------------
+# Join helper — builds the working daily_df used by all tabs
+# ---------------------------------------------------------------------------
+
+def build_daily_df(
+    floor_cap_df: pd.DataFrame,
+    allocation_df: pd.DataFrame,
+    headcount_df: pd.DataFrame,
+    prediction_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Join all 4 datasets into the working DataFrame consumed by every tab.
+
+    Returned columns (superset of DS4):
+        Date, Day, City, Building Name, Floor, LOB, Leader,
+        Holiday Flag, Optional Holiday Flag, Optional Holiday Name, US Holiday Flag,
+        Employee Count Predicted,
+        Total Capacity,       ← from DS1
+        Allocated Seats,      ← from DS2
+        Headcount,            ← from DS3
+        Utilization Pct,      ← Predicted / Total Capacity  (clipped at 1.30)
+        Seat Gap,             ← Allocated Seats − Predicted
+        HC Gap,               ← Allocated Seats − Headcount (static LOB snapshot)
+    """
+    floor_key  = [COL_CITY, COL_BUILDING, COL_FLOOR]
+    lob_key    = [COL_CITY, COL_BUILDING, COL_FLOOR, COL_LOB]
+
+    # Normalise join keys: strip whitespace, consistent string type
+    for df in (floor_cap_df, allocation_df, prediction_df):
+        for col in floor_key:
+            if col in df.columns:
+                df[col] = df[col].astype(str).str.strip()
+
+    alloc_slim = allocation_df[[*lob_key, COL_ALLOC_SEATS]].copy()
+    cap_slim   = floor_cap_df[[*floor_key, COL_TOTAL_CAP]].copy()
+    hc_slim    = headcount_df[[COL_LOB, COL_HEADCOUNT]].copy()
+
+    df = prediction_df.copy()
+    df = df.merge(cap_slim,   on=floor_key, how="left")
+    df = df.merge(alloc_slim, on=lob_key,   how="left")
+    df = df.merge(hc_slim,    on=COL_LOB,   how="left")
+
+    df[COL_UTIL_PCT] = (df[COL_PREDICTED] / df[COL_TOTAL_CAP]).clip(upper=1.30).round(3)
+    df[COL_SEAT_GAP] = df[COL_ALLOC_SEATS] - df[COL_PREDICTED]
+    df[COL_HC_GAP]   = df[COL_ALLOC_SEATS] - df[COL_HEADCOUNT]
+
     return df
 
 
 # ---------------------------------------------------------------------------
-# Helper functions
+# Buildings metadata — derived from DS1 for backward-compat (scenario planner)
 # ---------------------------------------------------------------------------
 
-def get_master_df() -> pd.DataFrame:
-    """Return the Building/Tower Master as a DataFrame (static reference data).
+def get_buildings_meta(floor_cap_df: Optional[pd.DataFrame] = None) -> list:
+    """Return building-level summary list for sidebar and scenario planner filters.
 
-    Columns: tower_id, tower_name, building_id, building_name, city, lob, floor_count, capacity
-    One row per tower — no date column.
+    Each entry: {building_id, building_name, city, total_capacity}
+    building_id is synthesised as '<CITY_CODE>-<index>' for display purposes.
     """
-    return pd.DataFrame([
-        {
-            "tower_id":      t["tower_id"],
-            "tower_name":    t["tower_name"],
-            "building_id":   t["building_id"],
-            "building_name": t["building_name"],
-            "city":          t["city"],
-            "lob":           t["lob"],
-            "floor_count":   t["floor_count"],
-            "capacity":      t["total_capacity"],
-        }
-        for t in TOWERS_META
-    ])
-
-
-def get_footfall_df(seed: int = 42, horizon_days: int = 365) -> pd.DataFrame:
-    """Return slim footfall-only DataFrame (date × tower_id × footfall).
-
-    Columns: date, tower_id, footfall
-    This is the time-series counterpart to get_master_df().
-    Join on tower_id to reconstruct the full working DataFrame.
-    """
-    full = generate_daily_footfall(seed=seed, horizon_days=horizon_days)
-    return full[["date", "tower_id", "footfall"]].copy()
-
-
-def join_master_footfall(master_df: pd.DataFrame, footfall_df: pd.DataFrame) -> pd.DataFrame:
-    """Join master + footfall on tower_id → full working DataFrame used by all tabs.
-
-    Returns columns:
-        date, tower_id, tower_name, building_id, building_name,
-        city, lob, floor_count, footfall, capacity, utilization_pct
-    """
-    df = footfall_df.merge(master_df, on="tower_id", how="left")
-    df["utilization_pct"] = (df["footfall"] / df["capacity"]).clip(upper=1.30)
-    return df
-
-
-def get_buildings_meta() -> list:
-    """Return building-level metadata list (backward-compat)."""
-    return BUILDINGS_META
-
-
-def get_towers_meta() -> list:
-    """Return full tower-level metadata list."""
-    return TOWERS_META
-
-
-def get_capacity_map() -> dict:
-    """Return {building_id: total_capacity} from BUILDINGS_META."""
-    return {b["building_id"]: b["total_capacity"] for b in BUILDINGS_META}
-
-
-def get_tower_map() -> dict:
-    """Return {tower_id: tower_name}."""
-    return {t["tower_id"]: t["tower_name"] for t in TOWERS_META}
-
-
-def get_unique_values(field: str) -> list:
-    """Return sorted unique values of a field from BUILDINGS_META."""
-    return sorted({b[field] for b in BUILDINGS_META if field in b})
+    df = floor_cap_df if floor_cap_df is not None else get_floor_capacity_df()
+    grp = (
+        df.groupby([COL_CITY, COL_BUILDING], sort=False)[COL_TOTAL_CAP]
+        .sum()
+        .reset_index()
+    )
+    result = []
+    city_counters: dict = {}
+    city_codes = {"Bangalore": "BLR", "Hyderabad": "HYD", "Chennai": "CHN", "Manila": "MNL"}
+    for _, row in grp.iterrows():
+        city = row[COL_CITY]
+        code = city_codes.get(city, city[:3].upper())
+        city_counters[code] = city_counters.get(code, 0) + 1
+        result.append({
+            "building_id":    f"{code}-{city_counters[code]}",
+            "building_name":  row[COL_BUILDING],
+            "city":           city,
+            "total_capacity": int(row[COL_TOTAL_CAP]),
+        })
+    return result

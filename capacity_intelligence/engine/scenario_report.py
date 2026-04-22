@@ -121,22 +121,25 @@ def _write_daily_data_sheet(
     start_ts = pd.Timestamp(date_range[0])
     end_ts = pd.Timestamp(date_range[1])
 
+    date_col      = "Date" if "Date" in baseline_df.columns else "date"
+    predicted_col = "Employee Count Predicted" if "Employee Count Predicted" in baseline_df.columns else "footfall"
+
     def daily_totals(df):
-        sliced = df[(df["date"] >= start_ts) & (df["date"] <= end_ts)]
+        sliced = df[(df[date_col] >= start_ts) & (df[date_col] <= end_ts)]
         return (
-            sliced.groupby("date")
-            .agg(footfall=("footfall", "sum"))
+            sliced.groupby(date_col)
+            .agg(predicted=(predicted_col, "sum"))
             .reset_index()
         )
 
-    base_d = daily_totals(baseline_df).rename(columns={"footfall": "Baseline Footfall"})
-    scen_d = daily_totals(scenario_df).rename(columns={"footfall": "Scenario Footfall"})
-    merged = base_d.merge(scen_d, on="date", how="outer").sort_values("date")
-    merged["Delta (seats)"] = merged["Scenario Footfall"] - merged["Baseline Footfall"]
+    base_d = daily_totals(baseline_df).rename(columns={"predicted": "Baseline Predicted"})
+    scen_d = daily_totals(scenario_df).rename(columns={"predicted": "Scenario Predicted"})
+    merged = base_d.merge(scen_d, on=date_col, how="outer").sort_values(date_col)
+    merged["Delta (seats)"] = merged["Scenario Predicted"] - merged["Baseline Predicted"]
     merged["Delta %"] = (
-        (merged["Delta (seats)"] / merged["Baseline Footfall"].clip(lower=1)) * 100
+        (merged["Delta (seats)"] / merged["Baseline Predicted"].clip(lower=1)) * 100
     ).round(1)
-    merged = merged.rename(columns={"date": "Date"})
+    merged = merged.rename(columns={date_col: "Date"})
     merged["Date"] = merged["Date"].dt.strftime("%Y-%m-%d")
     merged.to_excel(writer, sheet_name="Daily Data", index=False)
     _autofit(writer, "Daily Data", merged)

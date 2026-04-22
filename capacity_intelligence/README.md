@@ -4,22 +4,57 @@ A standalone Streamlit app that transforms predictive footfall data into actiona
 
 ---
 
-## Quick Start
+## Quick Start (development)
 
 ```bash
-# 1. Install dependencies
-pip install -r capacity_intelligence/requirements.txt
-
-# 2. Run the app (from the cpg_planning_tool root directory)
-streamlit run capacity_intelligence/app.py
-
-# Or from inside the capacity_intelligence folder:
-cd capacity_intelligence
+# From inside the capacity_intelligence folder:
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
 On first launch, go to the **⚙️ Admin** tab and click **Load Sample Data** — this activates all tabs instantly.
+
+---
+
+## Office Distribution (wheel-based)
+
+The app is packaged as a Python wheel (`.whl`) for clean distribution to Windows laptops that already have Python installed. No internet connection is required on the target machine.
+
+### Build a release (developer — run once per version)
+
+```bat
+cd capacity_intelligence
+build.bat
+```
+
+This produces a `dist/` folder containing:
+```
+dist/
+├── capacity_intelligence-0.1.0-py3-none-any.whl
+├── install.bat
+├── run.bat
+└── README.txt
+```
+
+Copy the entire `dist/` contents to a shared network drive.
+
+### Install on a user's laptop
+
+> **Note:** If your IT policy requires a virtual environment, create and activate it before running `install.bat`. The scripts do not create or manage one for you.
+
+1. Open the shared drive folder in a Command Prompt.
+2. Run `install.bat` — installs the app and all dependencies from the `.whl` file (no internet needed).
+3. Run `run.bat` — opens the app at `http://localhost:8501`.
+
+### Upgrade
+
+When a new `.whl` is published to the shared drive, users re-run `install.bat`. The `--upgrade` flag updates automatically.
+
+### Uninstall
+
+```bat
+pip uninstall capacity-intelligence
+```
 
 ---
 
@@ -255,6 +290,13 @@ scenario_footfall = baseline_footfall × combined_mult
 ```
 capacity_intelligence/
 ├── app.py                          # Streamlit entry point — page config, sidebar, tab wiring
+├── cli.py                          # Wheel entry point — launches streamlit run app.py
+├── pyproject.toml                  # Build config for pip-installable wheel
+├── build.bat                       # Developer: builds wheel + copies deploy scripts to dist/
+├── deploy/                         # Shared with users alongside the .whl
+│   ├── install.bat                 # User: pip installs from local .whl
+│   ├── run.bat                     # User: launches the app
+│   └── README.txt                  # User-facing installation instructions
 ├── data/
 │   └── ci_sample_data.py           # Sample data generator (12 buildings, ~3,480 rows)
 ├── engine/

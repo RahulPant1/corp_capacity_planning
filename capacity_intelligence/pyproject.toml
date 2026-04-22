@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "capacity-intelligence"
+version = "0.1.0"
+description = "CPG Capacity Planning Tool"
+requires-python = ">=3.9"
+dependencies = [
+    "streamlit>=1.20",
+    "pandas>=1.5",
+    "numpy>=1.23",
+    "plotly>=5.13",
+    "pulp>=2.7",
+    "openpyxl>=3.1",
+]
+
+[project.scripts]
+capacity-intelligence = "capacity_intelligence.cli:main"
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["capacity_intelligence*"]
+exclude = ["capacity_intelligence.for_future*"]

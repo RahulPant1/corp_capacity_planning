@@ -157,6 +157,11 @@ Individual datasets can be replaced via the **Replace** button without reloading
 **Scenario Adjustment Configuration** (expander)
 - Admin-editable table of event multipliers used in the Scenario Planner — add, edit, or delete event types without a code change
 
+**Holiday Calendar** (expander)
+- Define location-specific mandatory and optional holidays with Date, City (or "All"), Holiday Type, and Holiday Name
+- **Load Sample Holidays** pre-populates from the sample data window; **Apply to Data** overlays entries onto the prediction data
+- Sample data load auto-populates the calendar — holidays appear immediately in the Short-Term View callout
+
 ---
 
 ### 5. Help (📖)
@@ -180,9 +185,9 @@ In-app reference guide covering:
 | Bangalore | Prestige Tech Park, RMZ Infinity, Embassy Tech Village |
 | Hyderabad | Mindspace Hyderabad, DivyaSree, Raheja Mindspace |
 | Chennai | RMZ Millenia, Chennai One, TIDEL Park |
-| Manila | BGC One, Robinsons Cybergate, Eastwood City |
+| Manila | BGC One, Rockwell Business Center, Eastwood City Hub |
 
-LOB profiles: Engineering, Product, Sales, Finance, Operations, HR, Legal — mix of high-utilization and moderate-utilization.
+LOB profiles: Engineering, Product, Operations, Sales, Finance, Technology, HR — mix of high-utilization and moderate-utilization.
 
 ### Upload Your Own Data
 
@@ -267,7 +272,7 @@ All utilization and footfall KPIs use **weekdays only (Mon–Fri)**.
 ```
 predicted = allocated_seats × lob_base_util × dow_multiplier × holiday_reduction × noise
 
-lob_base_util   — per-LOB constant (e.g. Engineering ≈ 0.78, Operations ≈ 0.55)
+lob_base_util   — per-LOB constant (e.g. Engineering 0.82, Operations 0.78, Technology 0.80, HR 0.62)
 dow_multiplier  — Mon 0.82 · Tue 0.95 · Wed 1.00 · Thu 0.90 · Fri 0.70
 holiday_reduction — Public holiday ×0.10 · Optional holiday ×0.60 · US holiday ×0.75 · else ×1.0
 noise           — 1 + Normal(0, 0.07)  ← ±7%, seed=42
@@ -306,7 +311,7 @@ capacity_intelligence/
 │   ├── tab_short_term.py           # Short-Term View tab
 │   ├── tab_long_term.py            # Long-Term View tab (disabled — shows info message)
 │   ├── tab_scenario_planner.py     # Scenario Planner tab (Mode A + Mode B)
-│   ├── tab_admin.py                # Admin tab (data loading, scenario adjustment config)
+│   ├── tab_admin.py                # Admin tab (data loading, scenario adjustment config, holiday calendar)
 │   └── tab_help.py                 # Help / reference tab
 ├── config/
 │   └── defaults.py                 # Policy constants, thresholds, default scenario multipliers

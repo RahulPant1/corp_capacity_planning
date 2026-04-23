@@ -7,9 +7,10 @@ To re-enable: set ENABLE_LONG_TERM_VIEW = True in config/defaults.py.
 The tab will appear automatically — no other changes needed.
 
 When re-enabling, implement a new render() body that reads from ci_daily_df.
-The old implementation (removed during cleanup) required engine functions
-compute_long_term_kpis, compute_city_capacity_metrics, generate_insights_long_term
-which were never built — they need to be added to engine/capacity_forecast.py first.
+The required engine functions (compute_long_term_kpis, compute_city_capacity_metrics,
+generate_insights_long_term) have not been designed yet — start there before wiring
+any UI. Add them to engine/capacity_forecast.py following the patterns of the existing
+compute_* functions.
 """
 
 

@@ -11,10 +11,19 @@ Column conventions (matching ci_sample_data.py):
   Seat Gap                  ← Allocated Seats - Predicted
   HC Gap                    ← Allocated Seats - Headcount
 
+Column name constants:
+  Defined here as C_* and mirrored in data/ci_sample_data.py as COL_*.
+  Both sets refer to the same physical column names. If you rename a column,
+  update BOTH files. See CLAUDE.md → "Column name constants" for the full list.
+
 Capacity aggregation rule:
   Total Capacity is the same for all LOBs on the same floor.
   Always de-duplicate on (City, Building Name, Floor) before summing capacity
   to avoid counting a floor's capacity once per LOB.
+
+Risk thresholds:
+  Defined in config/defaults.py → RISK_THRESHOLDS. Do not hardcode 0.90/0.75/0.60
+  anywhere in this file — import get_risk_label() or RISK_THRESHOLDS from config.defaults.
 """
 
 from datetime import date
@@ -24,6 +33,8 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+
+from config.defaults import RISK_THRESHOLDS, get_risk_label
 
 # ---------------------------------------------------------------------------
 # Column name constants
@@ -181,8 +192,8 @@ def compute_portfolio_kpis(
         .agg(avg_util=("util", "mean"), peak_util=("util", "max"))
         .reset_index()
     )
-    buildings_above_90 = int((bldg_stats["peak_util"] > 0.90).sum())
-    buildings_below_60 = int((bldg_stats["avg_util"] < 0.60).sum())
+    buildings_above_90 = int((bldg_stats["peak_util"] > RISK_THRESHOLDS["over_capacity"]).sum())
+    buildings_below_60 = int((bldg_stats["avg_util"]  < RISK_THRESHOLDS["under_utilized"]).sum())
 
     return {
         "peak_footfall":     peak_footfall,
@@ -228,9 +239,8 @@ def compute_floor_utilization(
     )
     floor_stats["Avg Util %"]  = (floor_stats["avg_util"]  * 100).round(1)
     floor_stats["Peak Util %"] = (floor_stats["peak_util"] * 100).round(1)
-    floor_stats["Risk"] = floor_stats["peak_util"].apply(
-        lambda u: "🔴 Over Capacity" if u > 0.90
-        else ("🟡 Watch" if u > 0.75 else ("🔵 Under-utilized" if u < 0.60 else "🟢 Healthy"))
+    floor_stats["Risk"] = floor_stats.apply(
+        lambda r: get_risk_label(r["Peak Util %"], r["Avg Util %"]), axis=1
     )
     return floor_stats[[*FLOOR_KEY, "Avg Util %", "Peak Util %", "Risk", "capacity"]]
 
@@ -965,3 +975,54 @@ def plot_rto_seat_plan(plan_df: pd.DataFrame) -> go.Figure:
         margin=dict(l=10, r=10, t=40, b=10),
     )
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Holiday calendar overlay
+# ---------------------------------------------------------------------------
+
+def apply_holiday_calendar(
+    daily_df: pd.DataFrame,
+    holiday_cal: pd.DataFrame,
+) -> pd.DataFrame:
+    """Overlay admin-defined holidays onto ci_daily_df holiday flag columns.
+
+    Adds holidays from the calendar on top of whatever flags already exist in
+    the prediction data (union — does not remove existing flags).
+
+    Args:
+        daily_df:    ci_daily_df (the working DataFrame stored in session state)
+        holiday_cal: DataFrame with columns Date, City, Holiday Type, Holiday Name
+                     City = "All" applies the holiday to all cities.
+                     Holiday Type: "Mandatory" → Holiday Flag
+                                   "Optional"  → Optional Holiday Flag + Optional Holiday Name
+                                   "US"        → US Holiday Flag
+
+    Returns:
+        Updated copy of daily_df with adjusted flag columns.
+    """
+    if holiday_cal is None or holiday_cal.empty:
+        return daily_df
+
+    df = daily_df.copy()
+
+    for _, row in holiday_cal.iterrows():
+        hol_date = pd.Timestamp(row["Date"])
+        city     = str(row.get("City", "All")).strip()
+        htype    = str(row.get("Holiday Type", "")).strip()
+        hname    = str(row.get("Holiday Name", "")).strip()
+
+        mask = df[C_DATE] == hol_date
+        if city != "All":
+            mask = mask & (df[C_CITY] == city)
+
+        if htype == "Mandatory":
+            df.loc[mask, C_HOL] = 1
+        elif htype == "Optional":
+            df.loc[mask, C_OPT_HOL] = 1
+            if hname and "Optional Holiday Name" in df.columns:
+                df.loc[mask, "Optional Holiday Name"] = hname
+        elif htype == "US":
+            df.loc[mask, C_US_HOL] = 1
+
+    return df

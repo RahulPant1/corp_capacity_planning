@@ -11,6 +11,11 @@ Generates:
 Join keys:
   (City, Building Name, Floor)       — links DS1, DS2, DS4
   LOB                                — links DS2, DS3, DS4
+
+Column name constants:
+  Defined here as COL_* and mirrored in engine/capacity_forecast.py as C_*.
+  Both sets refer to the same physical column names. If you rename a column,
+  update BOTH files. See CLAUDE.md → "Column name constants" for the full list.
 """
 
 from datetime import date, timedelta
@@ -221,6 +226,8 @@ _HEADCOUNT_ROWS = [
 # ---------------------------------------------------------------------------
 
 # Base utilization rate per LOB (fraction of allocated seats expected in office on a typical Wed)
+# If a new LOB is added to _SEAT_ALLOCATION_ROWS, add its rate here too.
+# Missing LOBs silently fall back to 0.70 in get_prediction_df().
 _LOB_BASE_UTIL = {
     "Engineering": 0.82,
     "Product":     0.74,
@@ -236,7 +243,9 @@ _DOW_MULT = {0: 0.82, 1: 0.95, 2: 1.00, 3: 0.90, 4: 0.70, 5: 0.05, 6: 0.02}
 _DOW_NAME  = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday",
               4: "Friday", 5: "Saturday", 6: "Sunday"}
 
-# Holiday calendar for the sample 60-day window (relative to generation start = today)
+# Holiday calendar baked into sample prediction data.
+# These are specific to the Apr–Jun 2026 window. Refresh annually when updating the sample data.
+# Admins can also add/override holidays at runtime via Admin → Holiday Calendar without a code change.
 # Format: {offset_days: (holiday_flag, opt_flag, opt_name, us_flag)}
 def _build_holiday_map(start: date) -> dict:
     hmap = {}
@@ -272,6 +281,31 @@ def get_seat_allocation_df() -> pd.DataFrame:
 def get_headcount_df() -> pd.DataFrame:
     """DS3 — Total Headcount by LOB."""
     return pd.DataFrame(_HEADCOUNT_ROWS)[HEADCOUNT_COLS]
+
+
+def get_sample_holiday_df() -> pd.DataFrame:
+    """Return a structured holiday calendar DataFrame for the sample data window.
+
+    Columns: Date (Timestamp), City, Holiday Type, Holiday Name
+    City = "All" means the holiday applies across all cities.
+    Holiday Type: "Mandatory", "Optional", or "US"
+    Used to pre-populate the Admin → Holiday Calendar table.
+    """
+    start = date.today()
+    hmap = _build_holiday_map(start)
+    rows = []
+    for offset, (hol, opt, opt_name, us) in hmap.items():
+        d = pd.Timestamp(start + timedelta(days=offset))
+        if hol:
+            rows.append({"Date": d, "City": "All",   "Holiday Type": "Mandatory", "Holiday Name": "International Labour Day"})
+        if us:
+            name = "Memorial Day (US)" if (d.month == 5) else "Juneteenth (US)"
+            rows.append({"Date": d, "City": "All",   "Holiday Type": "US",        "Holiday Name": name})
+        if opt and opt_name:
+            rows.append({"Date": d, "City": "All",   "Holiday Type": "Optional",  "Holiday Name": opt_name})
+    return pd.DataFrame(rows) if rows else pd.DataFrame(
+        columns=["Date", "City", "Holiday Type", "Holiday Name"]
+    )
 
 
 def get_prediction_df(seed: int = 42, horizon_days: int = 60) -> pd.DataFrame:

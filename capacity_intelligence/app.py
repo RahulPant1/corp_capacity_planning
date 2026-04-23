@@ -81,14 +81,16 @@ st.markdown("""
 # Full key reference: CLAUDE.md → "Session state keys"
 # ---------------------------------------------------------------------------
 _DEFAULTS = {
-    "ci_data_loaded":        False,
-    "ci_daily_df":           None,  # joined working DataFrame — all analytical tabs read this
-    "ci_floor_capacity_df":  None,  # DS1 — Floor Capacity
-    "ci_seat_allocation_df": None,  # DS2 — Seat Allocation
-    "ci_headcount_df":       None,  # DS3 — Total Headcount
-    "ci_prediction_df":      None,  # DS4 — 60-Day Prediction
-    "ci_buildings_meta":     None,  # building-level metadata list (derived from DS1)
-    "ci_data_source":        None,  # "sample" or "upload"
+    "ci_data_loaded":           False,
+    "ci_daily_df":              None,  # joined working DataFrame — all analytical tabs read this
+    "ci_floor_capacity_df":     None,  # DS1 — Floor Capacity
+    "ci_seat_allocation_df":    None,  # DS2 — Seat Allocation
+    "ci_headcount_df":          None,  # DS3 — Total Headcount
+    "ci_prediction_df":         None,  # DS4 — 60-Day Prediction
+    "ci_buildings_meta":        None,  # building-level metadata list (derived from DS1)
+    "ci_data_source":           None,  # "sample" or "upload"
+    "ci_scenario_multipliers":  None,  # event multipliers; None = use DEFAULT_SCENARIO_MULTIPLIERS
+    "ci_holiday_calendar":      None,  # DataFrame(Date, City, Holiday Type, Holiday Name) or None
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:

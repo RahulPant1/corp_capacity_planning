@@ -18,9 +18,18 @@ Engine functions live in engine/capacity_forecast.py — import them inside rend
 """
 
 
+def _style_risk_col(df, subset: str = "Risk"):
+    """Apply risk-tier text colours to a dataframe column.  Uses RISK_COLOURS from config."""
+    from config.defaults import RISK_COLOURS
+    def _c(v):
+        return f"color:{RISK_COLOURS.get(str(v), '#000')};font-weight:{'bold' if str(v) in ('🔴 Over Capacity', '🟡 Watch') else 'normal'}"
+    return df.style.map(_c, subset=[subset])
+
+
 def render() -> None:
     import streamlit as st
     import pandas as pd
+    from config.defaults import get_risk_label
     from engine.capacity_forecast import (
         C_DATE, C_CITY, C_BUILDING, C_FLOOR, C_LOB,
         C_PREDICTED, C_CAPACITY, C_ALLOC, C_SEAT_GAP,
@@ -156,30 +165,17 @@ def render() -> None:
             bldg_stats["Avg Util %"]  = (bldg_stats["avg_util"]  * 100).round(1)
             bldg_stats["Peak Util %"] = (bldg_stats["peak_util"] * 100).round(1)
 
-            def _risk(row):
-                if row["Peak Util %"] > 90: return "🔴 Over Capacity"
-                if row["Avg Util %"]  > 75: return "🟡 Watch"
-                if row["Avg Util %"]  < 60: return "🔵 Under-utilized"
-                return "🟢 Healthy"
-
-            bldg_stats["Risk"] = bldg_stats.apply(_risk, axis=1)
+            bldg_stats["Risk"] = bldg_stats.apply(
+                lambda r: get_risk_label(r["Peak Util %"], r["Avg Util %"]), axis=1
+            )
             display = bldg_stats.sort_values("Peak Util %", ascending=False).rename(
                 columns={C_CITY: "City", C_BUILDING: "Building",
                          "peak_predicted": "Peak Predicted"}
             )[["Building", "City", "Total Capacity", "Peak Predicted",
                "Avg Util %", "Peak Util %", "Risk"]]
 
-            def _style_risk(df):
-                def _c(v):
-                    s = str(v)
-                    if s.startswith("🔴"): return "color:#dc3545;font-weight:bold"
-                    if s.startswith("🟡"): return "color:#856404;font-weight:bold"
-                    if s.startswith("🔵"): return "color:#6c757d"
-                    return "color:#155724"
-                return df.style.map(_c, subset=["Risk"])
-
             st.dataframe(
-                _style_risk(display),
+                _style_risk_col(display),
                 use_container_width=True,
                 hide_index=True,
                 column_config={
@@ -201,17 +197,8 @@ def render() -> None:
                     ["Building", "City", "Floor", "Avg Util %", "Peak Util %", "Risk"]
                 ].sort_values("Peak Util %", ascending=False)
 
-                def _style_floor(df):
-                    def _c(v):
-                        s = str(v)
-                        if s.startswith("🔴"): return "color:#dc3545;font-weight:bold"
-                        if s.startswith("🟡"): return "color:#856404;font-weight:bold"
-                        if s.startswith("🔵"): return "color:#6c757d"
-                        return "color:#155724"
-                    return df.style.map(_c, subset=["Risk"])
-
                 st.dataframe(
-                    _style_floor(display_fu),
+                    _style_risk_col(display_fu),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
@@ -237,6 +224,8 @@ def render() -> None:
                     return df.style.map(_c, subset=["Gap"])
 
                 st.dataframe(_style_gap(display_lg), use_container_width=True, hide_index=True)
+                # _style_gap is kept separate: gap colouring is numeric (negative=red),
+                # not the same risk-tier logic as _style_risk_col.
                 st.caption("Gap = Allocated Seats − Total Headcount. Negative = LOB needs more space than allocated.")
 
     # ── Insights + Forecast line ───────────────────────────────────────────

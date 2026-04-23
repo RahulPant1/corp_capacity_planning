@@ -29,6 +29,7 @@ def render() -> None:
         get_seat_allocation_df,
         get_headcount_df,
         get_prediction_df,
+        get_sample_holiday_df,
         build_daily_df,
         get_buildings_meta,
         FLOOR_CAPACITY_COLS,
@@ -70,12 +71,17 @@ def render() -> None:
         ])
 
     def _join_and_activate() -> None:
+        from engine.capacity_forecast import apply_holiday_calendar
         daily_df = build_daily_df(
             floor_cap_df=st.session_state["ci_floor_capacity_df"],
             allocation_df=st.session_state["ci_seat_allocation_df"],
             headcount_df=st.session_state["ci_headcount_df"],
             prediction_df=st.session_state["ci_prediction_df"],
         )
+        # Overlay admin-defined holidays if any exist from a previous session
+        cal = st.session_state.get("ci_holiday_calendar")
+        if cal is not None and not cal.empty:
+            daily_df = apply_holiday_calendar(daily_df, cal)
         st.session_state["ci_daily_df"]       = daily_df
         st.session_state["ci_buildings_meta"] = get_buildings_meta(
             st.session_state["ci_floor_capacity_df"]
@@ -152,6 +158,9 @@ def render() -> None:
                 st.write("Generating 60-Day Predictions…")
                 pred_df = get_prediction_df()
                 st.session_state["ci_prediction_df"] = pred_df
+
+                st.write("Loading holiday calendar…")
+                st.session_state["ci_holiday_calendar"] = get_sample_holiday_df()
 
                 st.write("Joining datasets…")
                 _join_and_activate()
@@ -399,7 +408,8 @@ def render() -> None:
             "Multiplier > 1.0 increases attendance; < 1.0 decreases attendance."
         )
 
-        if "ci_scenario_multipliers" not in st.session_state:
+        # Initialise on first visit if app.py default (None) hasn't been set yet
+        if st.session_state.get("ci_scenario_multipliers") is None:
             st.session_state["ci_scenario_multipliers"] = copy.deepcopy(DEFAULT_SCENARIO_MULTIPLIERS)
 
         current: dict = st.session_state["ci_scenario_multipliers"]
@@ -448,3 +458,96 @@ def render() -> None:
                 st.session_state["ci_scenario_multipliers"] = copy.deepcopy(DEFAULT_SCENARIO_MULTIPLIERS)
                 st.success("Reset to defaults.")
                 st.rerun()
+
+    # ---------------------------------------------------------------------------
+    # Holiday Calendar
+    # ---------------------------------------------------------------------------
+    st.divider()
+    with st.expander("📅 Holiday Calendar", expanded=False):
+        st.caption(
+            "Define location-specific mandatory and optional holidays. "
+            "These are overlaid onto the prediction data — they add to existing holidays "
+            "without removing any already flagged in the uploaded file. "
+            "Click **Apply to Data** after editing."
+        )
+
+        # Initialise calendar if empty
+        if st.session_state.get("ci_holiday_calendar") is None:
+            st.session_state["ci_holiday_calendar"] = pd.DataFrame(
+                columns=["Date", "City", "Holiday Type", "Holiday Name"]
+            )
+
+        cal_df: pd.DataFrame = st.session_state["ci_holiday_calendar"]
+
+        # ── Toolbar ───────────────────────────────────────────────────────────
+        tb1, tb2, tb3 = st.columns([2, 2, 4])
+        with tb1:
+            if st.button("Load Sample Holidays", key="admin_hol_sample", type="secondary"):
+                st.session_state["ci_holiday_calendar"] = get_sample_holiday_df()
+                st.rerun()
+        with tb2:
+            if st.button("Clear All", key="admin_hol_clear", type="secondary"):
+                st.session_state["ci_holiday_calendar"] = pd.DataFrame(
+                    columns=["Date", "City", "Holiday Type", "Holiday Name"]
+                )
+                st.rerun()
+
+        # ── Editable table ────────────────────────────────────────────────────
+        # Derive city options from loaded data (fallback to common values)
+        if st.session_state.get("ci_daily_df") is not None:
+            city_opts = ["All"] + sorted(
+                st.session_state["ci_daily_df"][COL_CITY].unique().tolist()
+            )
+        else:
+            city_opts = ["All", "Bangalore", "Hyderabad", "Chennai", "Manila"]
+
+        edited_cal = st.data_editor(
+            cal_df,
+            num_rows="dynamic",
+            column_config={
+                "Date": st.column_config.DateColumn(
+                    "Date", required=True,
+                    help="Date of the holiday",
+                ),
+                "City": st.column_config.SelectboxColumn(
+                    "City", options=city_opts, required=True,
+                    help="'All' applies to every city; select a city for location-specific holidays",
+                ),
+                "Holiday Type": st.column_config.SelectboxColumn(
+                    "Holiday Type",
+                    options=["Mandatory", "Optional", "US"],
+                    required=True,
+                    help="Mandatory → closes office (0.10× multiplier). "
+                         "Optional → reduced attendance (0.60×). "
+                         "US → US team out (0.75×).",
+                ),
+                "Holiday Name": st.column_config.TextColumn(
+                    "Holiday Name", required=True,
+                    help="Display name shown in the Short-Term View callout",
+                ),
+            },
+            hide_index=True,
+            use_container_width=True,
+            key="admin_hol_editor",
+        )
+
+        col_apply, col_info = st.columns([2, 5])
+        with col_apply:
+            if st.button("Apply to Data", key="admin_hol_apply", type="primary",
+                         disabled=not st.session_state.get("ci_data_loaded")):
+                from engine.capacity_forecast import apply_holiday_calendar
+                # Save the edited calendar
+                edited_cal["Date"] = pd.to_datetime(edited_cal["Date"])
+                st.session_state["ci_holiday_calendar"] = edited_cal
+                # Re-apply to ci_daily_df
+                base_df = build_daily_df(
+                    floor_cap_df=st.session_state["ci_floor_capacity_df"],
+                    allocation_df=st.session_state["ci_seat_allocation_df"],
+                    headcount_df=st.session_state["ci_headcount_df"],
+                    prediction_df=st.session_state["ci_prediction_df"],
+                )
+                st.session_state["ci_daily_df"] = apply_holiday_calendar(base_df, edited_cal)
+                st.success(f"Holiday calendar applied — {len(edited_cal)} entries active.")
+        with col_info:
+            if not st.session_state.get("ci_data_loaded"):
+                st.info("Load data first before applying the holiday calendar.")

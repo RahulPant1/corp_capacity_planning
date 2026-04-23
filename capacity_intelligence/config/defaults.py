@@ -16,6 +16,42 @@ WORKING_DAYS_PER_WEEK = 5
 ENABLE_LONG_TERM_VIEW = False
 
 # ---------------------------------------------------------------------------
+# Risk tier thresholds — used by capacity_forecast.py and tab_short_term.py
+# Values are fractions (0–1), matching the Utilization Pct column in ci_daily_df.
+# If you change a threshold here it automatically updates all tables and charts.
+# ---------------------------------------------------------------------------
+RISK_THRESHOLDS = {
+    "over_capacity":  0.90,   # Peak util > 90% → 🔴 Over Capacity
+    "watch":          0.75,   # Avg  util > 75% → 🟡 Watch
+    "under_utilized": 0.60,   # Avg  util < 60% → 🔵 Under-utilized
+    # Anything else           →              🟢 Healthy
+}
+
+# ---------------------------------------------------------------------------
+# Risk tier display colours — used by tab_short_term.py style functions.
+# Keys must match the label strings produced by get_risk_label() below.
+# ---------------------------------------------------------------------------
+RISK_COLOURS = {
+    "🔴 Over Capacity":  "#dc3545",   # red
+    "🟡 Watch":          "#856404",   # amber
+    "🔵 Under-utilized": "#6c757d",   # grey
+    "🟢 Healthy":        "#155724",   # green
+}
+
+# Convenience function — call this instead of writing if/elif chains in tabs.
+def get_risk_label(peak_util_pct: float, avg_util_pct: float) -> str:
+    """Return the risk tier label for a building or floor.
+
+    Args:
+        peak_util_pct: peak utilization as a percentage (0–130)
+        avg_util_pct:  avg  utilization as a percentage (0–130)
+    """
+    if peak_util_pct > RISK_THRESHOLDS["over_capacity"]  * 100: return "🔴 Over Capacity"
+    if avg_util_pct  > RISK_THRESHOLDS["watch"]          * 100: return "🟡 Watch"
+    if avg_util_pct  < RISK_THRESHOLDS["under_utilized"] * 100: return "🔵 Under-utilized"
+    return "🟢 Healthy"
+
+# ---------------------------------------------------------------------------
 # Scenario Planner — event adjustment multipliers
 # Each entry: {event_key: {"label": display_name, "multiplier": float}}
 # Multiplier > 1.0 increases footfall; < 1.0 decreases footfall.

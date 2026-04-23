@@ -1,3 +1,10 @@
+> **You are on the `feature/limited-version` branch.**
+> The app on this branch is the **Capacity Intelligence limited version** — located in [`capacity_intelligence/`](capacity_intelligence/).
+> See [`capacity_intelligence/README.md`](capacity_intelligence/README.md) for setup, tabs, and data format documentation.
+> The full seat-planning platform (Executive Dashboard, Scenario Lab, LP Optimizer) is on the `main` branch.
+
+---
+
 # CPG Seat Planning & Scenario Intelligence Platform
 
 A data-driven seat planning and optimization tool for Companies & Properties Group (CPG). Combines flat allocation rules with real attendance data (Median HC, Peak HC, RTO patterns) and LP optimization to find the best seat placement across buildings and floors.
